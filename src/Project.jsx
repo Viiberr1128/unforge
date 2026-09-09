@@ -4,8 +4,10 @@ import { Icon, Modal, relativeDate } from './ui.jsx';
 import { previewDocument } from './preview.js';
 import Footprint from './Footprint.jsx';
 import AgentWork from './AgentWork.jsx';
+import ProjectCare from './ProjectCare.jsx';
+import Recovery from './Recovery.jsx';
 
-export default function Project({ id, back, onUpdated, onNavigationBlocked }) {
+export default function Project({ id, back, onUpdated, onNavigationBlocked, onOpenProject }) {
   const [project, setProject] = useState(null);
   const [tab, setTab] = useState('Overview');
   const [file, setFile] = useState('README.md');
@@ -16,12 +18,14 @@ export default function Project({ id, back, onUpdated, onNavigationBlocked }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [childBlocked, setChildBlocked] = useState(false);
+  const [agentRequest, setAgentRequest] = useState(null);
   async function load() {
     const value = await api(`/projects/${id}`);
     setProject(value); return value;
   }
   useEffect(() => { load().catch(e => setError(e.message)); }, [id]);
-  useEffect(() => { onNavigationBlocked(draft || busy); return () => onNavigationBlocked(false); }, [draft, busy, onNavigationBlocked]);
+  useEffect(() => { onNavigationBlocked(draft || busy || childBlocked); return () => onNavigationBlocked(false); }, [draft, busy, childBlocked, onNavigationBlocked]);
   useEffect(() => {
     const warn = event => { if (draft) { event.preventDefault(); event.returnValue = ''; } };
     window.addEventListener('beforeunload', warn);
@@ -55,18 +59,20 @@ export default function Project({ id, back, onUpdated, onNavigationBlocked }) {
   const readonly = project.files.find(f => f.path === file)?.readonly;
   const requests = project.files.filter(f => f.path.startsWith('.unforge/requests/'));
   return <>
-    <header className="page-top"><button className="text-button" onClick={back} disabled={draft || busy}><Icon name="back"/>Your projects</button><span className="local-state"><span className={`dot ${project.dirty || draft ? 'amber' : ''}`}/>{draft ? 'Editor has unwritten changes' : project.dirty ? 'Changes ready to save' : 'All changes saved'}</span></header>
-    <section className="project-heading"><div><h1>{project.name}</h1><p>{project.description || 'A place to start something useful.'}</p></div><button onClick={() => show('save')} disabled={busy || draft || !project.dirty}><Icon name="check"/>Save a version</button></section>
-    <nav className="tabs" aria-label="Project views">{['Overview', 'Files', 'History', 'Dependencies', 'Take it with you'].map(label => <button key={label} disabled={busy || (draft && label !== tab)} className={tab === label ? 'active' : ''} aria-current={tab === label ? 'page' : undefined} onClick={() => {setTab(label); setNotice('');}}>{label}</button>)}</nav>
+    <header className="page-top"><button className="text-button" onClick={back} disabled={draft || busy || childBlocked}><Icon name="back"/>Your projects</button><span className="local-state"><span className={`dot ${project.dirty || draft || childBlocked ? 'amber' : ''}`}/>{draft || childBlocked ? 'Work in progress in this view' : project.dirty ? 'Changes ready to save' : 'All changes saved'}</span></header>
+    <section className="project-heading"><div><h1>{project.name}</h1><p>{project.description || 'A place to start something useful.'}</p></div><button onClick={() => show('save')} disabled={busy || draft || childBlocked || !project.dirty}><Icon name="check"/>Save a version</button></section>
+    <nav className="tabs" aria-label="Project views">{['Overview', 'Files', 'History', 'Project care', 'Recovery', 'Dependencies', 'Take it with you'].map(label => <button key={label} disabled={busy || ((draft || childBlocked) && label !== tab)} className={tab === label ? 'active' : ''} aria-current={tab === label ? 'page' : undefined} onClick={() => {setAgentRequest(null);setTab(label); setNotice('');}}>{label}</button>)}</nav>
     {error && <p role="alert" className="error">{error}</p>}{notice && <p role="status" className="notice">{notice}</p>}
     {tab === 'Overview' && <div className="overview">
       <div className="section-heading"><div><h2>A little room to experiment.</h2><p>A static preview of your project’s index.html. Scripts and external resources are disabled.</p></div><button className="secondary" onClick={() => {chooseFile('index.html'); setTab('Files');}}>Edit this page<Icon name="arrow"/></button></div>
       {html ? <iframe title="Project static preview" className="preview" sandbox="" referrerPolicy="no-referrer" srcDoc={previewDocument(html)}/> : <div className="empty"><p>Add index.html in Files to preview a page here.</p></div>}
-      <AgentWork id={id} dirty={project.dirty} onApplied={async () => {await load(); await onUpdated();}}/>
+      <AgentWork id={id} dirty={project.dirty} initialRequest={agentRequest} onBlocked={setChildBlocked} onApplied={async () => {await load(); await onUpdated();}}/>
       <section className="request-band"><div><h2>What would make this more useful?</h2><p>Write a clear request for your coding agent. It stays in the project as an ordinary file.</p></div><button className="secondary" onClick={() => show('request')}>Write a request<Icon name="arrow"/></button></section>
       {requests.length > 0 && <details><summary>{requests.length} saved request{requests.length !== 1 ? 's' : ''}</summary>{requests.map(r => <article className="request" key={r.path}><small>{r.path}</small><pre>{r.content}</pre></article>)}</details>}
       <p className="note">Request files are portable handoffs. They do not start an agent automatically.</p>
     </div>}
+    {tab === 'Project care' && <ProjectCare id={id} onUpdated={async () => {await load();await onUpdated();}} onBlocked={setChildBlocked} onSimplify={request => {setAgentRequest({text:request,id:crypto.randomUUID()});setTab('Overview');}}/>}
+    {tab === 'Recovery' && <Recovery key={`${id}:${project.history[0]?.id}`} id={id} dirty={project.dirty} onUpdated={async () => {await load();await onUpdated();}} onBlocked={setChildBlocked} onOpenProject={onOpenProject}/>}
     {tab === 'Files' && <>
       <div className="section-heading"><div><h2>Everything is a file.</h2><p>{draft ? 'Write your changes before switching files or views.' : 'Edit text here, or use your own editor.'}</p></div><button className="secondary" disabled={draft || busy} onClick={() => show('file')}>New file<Icon name="plus"/></button></div>
       <div className="editor-layout"><nav className="file-list" aria-label="Project files">{project.files.map(f => <button key={f.path} className={f.path === file ? 'selected' : ''} disabled={busy || (draft && f.path !== file)} onClick={() => chooseFile(f.path)}><Icon name="file" size={16}/><span>{f.path}</span></button>)}</nav>

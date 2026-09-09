@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ROOT_FILES = ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CONTRIBUTING.md', 'SECURITY.md', 'AGENTS.md',
               'package.json', 'package-lock.json', 'vite.config.js', 'index.html', '.gitignore',
               'engine.py', 'launcher.py', 'unforge.py', 'agent_jobs.py', 'test_agent_jobs.py', 'insights.py', 'test_insights.py', 'test_engine.py', 'test_client.py',
+              'operations.py', 'care.py', 'recovery.py', 'test_operations.py', 'test_care.py', 'test_recovery.py',
               'start.sh', 'start.command', 'check.sh']
 DIRECTORIES = ['src', 'public', 'docs', 'tests', 'scripts', 'dist', '.github']
 

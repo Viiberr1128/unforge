@@ -257,6 +257,7 @@ class Engine:
 
     def validate_tree(self, root, revision, require_metadata=True):
         target_paths = []
+        portable_paths = {}
         for record in self.git(root, 'ls-tree', '-rz', revision).decode('utf-8').split('\0'):
             if not record:
                 continue
@@ -265,6 +266,20 @@ class Engine:
             if mode not in ('100644', '100755') or kind != 'blob':
                 raise Problem('Restore cannot include symbolic links or submodules')
             self.safe_path(root, path)
+            # Verify every directory prefix too: a Linux tree containing a file
+            # "Data" and a directory "data" cannot be checked out losslessly on
+            # the usual macOS filesystem. Reject before Git writes any files.
+            parts = path.split('/')
+            for index in range(1, len(parts) + 1):
+                prefix = '/'.join(parts[:index])
+                kind = 'file' if index == len(parts) else 'directory'
+                key = unicodedata.normalize('NFC', prefix).casefold()
+                prior = portable_paths.get(key)
+                if prior and (prior != (prefix, kind) or kind == 'file'):
+                    raise Problem('Version contains paths that collide by case or Unicode normalization')
+                portable_paths[key] = (prefix, kind)
+            if path.casefold() == '.unforge/project.json' and path != '.unforge/project.json':
+                raise Problem('Project metadata path must use its standard spelling')
             target_paths.append(path)
         if '.unforge/project.json' not in target_paths:
             if require_metadata:
@@ -355,8 +370,16 @@ class Server(ThreadingHTTPServer):
         try:
             super().__init__(address, Handler)
             from agent_jobs import AgentJobs
-            self.agent_jobs = AgentJobs(engine)
+            from operations import Operations
+            from recovery import Recovery
+            from care import Care
+            self.operations = Operations(engine.home)
+            self.recovery = Recovery(engine)
+            self.care = Care(engine)
+            self.agent_jobs = AgentJobs(engine, operations=self.operations)
         except Exception:
+            if hasattr(self, 'operations'):
+                self.operations.close()
             super().server_close()
             self._release_home_lock()
             raise
@@ -371,6 +394,8 @@ class Server(ThreadingHTTPServer):
         try:
             if hasattr(self, 'agent_jobs'):
                 self.agent_jobs.close()
+            if hasattr(self, 'operations'):
+                self.operations.close()
             super().server_close()
         finally:
             self._release_home_lock()
@@ -402,16 +427,37 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path = unquote(urlsplit(self.path).path)
             if path == '/api/health':
-                return self.send(200, dict(ok=True, version='0.1.0'))
+                return self.send(200, dict(ok=True, version='0.2.0'))
             if path == '/api/session':
                 return self.send(200, dict(token=self.server.token))
             if path == '/api/agent/status':
                 return self.send(200, self.server.agent_jobs.status())
+            if path == '/api/operations':
+                return self.send(200, self.server.operations.overview())
+            consequence_match = re.fullmatch(r'/api/agent/jobs/([a-f0-9]{32})/consequences', path)
+            if consequence_match:
+                job = self.server.agent_jobs.get(consequence_match[1])
+                return self.send(200, self.server.care.consequences(job['projectId'], job.get('diff') or ''))
             job_match = re.fullmatch(r'/api/agent/jobs/([a-f0-9]{32})', path)
             if job_match:
                 return self.send(200, self.server.agent_jobs.get(job_match[1]))
             if path == '/api/projects':
                 return self.send(200, dict(projects=self.server.engine.projects()))
+            recovery_match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/recovery/([a-f0-9]{32})/download', path)
+            if recovery_match:
+                name, data = self.server.recovery.download(*recovery_match.groups())
+                return self.send(200, data, 'application/gzip', f'attachment; filename="{name}"')
+            care_match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/(care|consequences|simplify|handoff|retirement|recovery)', path)
+            if care_match:
+                pid, action = care_match.groups()
+                if action == 'handoff':
+                    return self.send(200, self.server.care.handoff(pid).encode('utf-8'), 'text/markdown; charset=utf-8', 'attachment; filename="unforge-handoff.md"')
+                if action == 'care': result = self.server.care.get(pid)
+                elif action == 'consequences': result = self.server.care.consequences(pid)
+                elif action == 'simplify': result = self.server.care.simplify_request(pid)
+                elif action == 'retirement': result = self.server.care.prepare_retirement(pid)
+                else: result = self.server.recovery.state(pid)
+                return self.send(200, result)
             match = re.fullmatch(r'/api/projects/([a-f0-9]{32})(/export|/insights)?', path)
             if match:
                 if match[2] == '/insights':
@@ -442,20 +488,26 @@ class Handler(BaseHTTPRequestHandler):
         expected = f'http://{self.headers.get("Host", "")}'
         if not self.host_ok() or self.headers.get('Origin') != expected or self.headers.get('X-Unforge-Token') != self.server.token:
             return self.send(403, dict(error='Local session authorization required'))
-        if urlsplit(self.path).path == '/api/import-bundle':
+        if urlsplit(self.path).path in ('/api/import-bundle', '/api/import-capsule'):
+            capsule = urlsplit(self.path).path == '/api/import-capsule'
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/octet-stream' or self.headers.get('Transfer-Encoding'):
                 return self.send(415, dict(error='Binary bundle upload required'))
             try:
                 length = int(self.headers.get('Content-Length', '0'))
-                if not 1 <= length <= 20 * 1024 * 1024:
-                    raise Problem('Bundle upload must be between 1 byte and 20 MiB')
+                limit = (256 if capsule else 20) * 1024 * 1024
+                if not 1 <= length <= limit:
+                    raise Problem(f'Upload must be between 1 byte and {limit // (1024 * 1024)} MiB')
                 with tempfile.TemporaryDirectory() as temporary:
-                    bundle = Path(temporary) / 'upload.bundle'
-                    body = self.rfile.read(length)
-                    if len(body) != length:
-                        raise Problem('Incomplete bundle upload')
-                    bundle.write_bytes(body)
-                    result = self.server.engine.import_bundle(str(bundle))
+                    bundle = Path(temporary) / ('upload.tar.gz' if capsule else 'upload.bundle')
+                    with bundle.open('wb') as output:
+                        remaining = length
+                        while remaining:
+                            chunk = self.rfile.read(min(65536, remaining))
+                            if not chunk:
+                                raise Problem('Incomplete upload')
+                            output.write(chunk)
+                            remaining -= len(chunk)
+                    result = self.server.recovery.import_capsule(str(bundle)) if capsule else self.server.engine.import_bundle(str(bundle))
                 return self.send(201, result)
             except (Problem, OSError, ValueError, RecursionError, subprocess.SubprocessError) as error:
                 return self.send(400, dict(error=str(error)))
@@ -471,7 +523,19 @@ class Handler(BaseHTTPRequestHandler):
             path = urlsplit(self.path).path
             engine = self.server.engine
             if path == '/api/agent/jobs':
-                return self.send(201, self.server.agent_jobs.start(payload.get('projectId'), payload.get('request')))
+                return self.send(201, self.server.agent_jobs.start(payload.get('projectId'), payload.get('request'), payload.get('operationId')))
+            if path == '/api/operations/settings':
+                return self.send(200, self.server.operations.configure(payload.get('dailyLimit'), payload.get('expectedRevision')))
+            if path == '/api/operations/practice':
+                engine.root(payload.get('projectId'))
+                return self.send(200, self.server.operations.practice(payload.get('projectId'), payload.get('operationId'), payload.get('action'), payload.get('payload', {})))
+            if path == '/api/operations/resume':
+                engine.root(payload.get('projectId'))
+                return self.send(200, self.server.operations.resume(payload.get('projectId')))
+            if path == '/api/operations/reconcile':
+                return self.send(200, self.server.operations.reconcile(payload.get('operationId'), payload.get('outcome'), payload.get('note')))
+            if path == '/api/recovery/import':
+                return self.send(201, self.server.recovery.import_capsule(payload.get('path')))
             job_match = re.fullmatch(r'/api/agent/jobs/([a-f0-9]{32})/(cancel|apply)', path)
             if job_match:
                 action = getattr(self.server.agent_jobs, job_match[2])
@@ -480,6 +544,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(201, engine.import_bundle(payload.get('path'), payload.get('name')))
             if path == '/api/projects':
                 return self.send(201, engine.create(payload.get('name'), payload.get('description', '')))
+            recovery_match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/recovery(?:/([a-f0-9]{32})/(rehearse|restore))?', path)
+            if recovery_match:
+                pid, capsule_id, action = recovery_match.groups()
+                if action: result = getattr(self.server.recovery, action)(pid, capsule_id)
+                else: result = self.server.recovery.create(pid, payload.get('assets', []))
+                return self.send(200, result)
+            care_match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/(care|retirement|behavior-check)', path)
+            if care_match:
+                pid, action = care_match.groups()
+                if action == 'care':
+                    result = self.server.care.save(pid, payload.get('document'), payload.get('expectedRevision'))
+                elif action == 'behavior-check':
+                    result = self.server.care.record_check(pid, payload.get('example'), payload.get('outcome'), payload.get('note'), payload.get('expectedRevision'))
+                else:
+                    with engine.lock:
+                        evidence = self.server.recovery.state(pid)
+                        result = self.server.care.retire(pid, payload.get('expectedRevision'), evidence, payload.get('capsuleId'), payload.get('note', ''))
+                return self.send(200, result)
             match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/(file|save|restore|request)', path)
             if not match:
                 return self.send(404, dict(error='Unknown endpoint'))

@@ -2,10 +2,13 @@ import { useEffect, useState } from 'react';
 import { api } from './api.js';
 import { Modal, Icon } from './ui.jsx';
 import { agentExplanation } from './agentOutput.js';
+import { useLeaveGuard } from './useLeaveGuard.js';
+import { operationKey, finishOperation } from './operationKey.js';
+import Consequences from './Consequences.jsx';
 
-const labels = {running:'Codex is working in a separate copy',completed:'A proposal is ready to review',failed:'This attempt needs attention',cancelled:'Work stopped',timed_out:'The time limit was reached',applied:'Proposal brought into your project'};
+const labels = {running:'Codex is working in a separate copy',completed:'A proposal is ready to review',failed:'This attempt needs attention',cancelled:'Work stopped',timed_out:'The time limit was reached',applied:'Proposal brought into your project',archived:'Receipt from an earlier session',unknown:'This attempt has an uncertain outcome'};
 
-export default function AgentWork({ id, dirty, onApplied }) {
+export default function AgentWork({ id, dirty, onApplied, initialRequest, onBlocked }) {
   const [status, setStatus] = useState(null);
   const [job, setJob] = useState(null);
   const [prompt, setPrompt] = useState('');
@@ -13,6 +16,16 @@ export default function AgentWork({ id, dirty, onApplied }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [reviewApply, setReviewApply] = useState(false);
+  const [impact, setImpact] = useState(null);
+  useLeaveGuard(busy || open || reviewApply, onBlocked);
+  useEffect(() => {if (initialRequest) {setPrompt(initialRequest.text);setOpen(true);}}, [initialRequest?.id]);
+  useEffect(() => {
+    setImpact(null);
+    if (job?.status !== 'completed') return;
+    let active = true;
+    api(`/agent/jobs/${job.id}/consequences`).then(value => {if (active) setImpact(value);}).catch(e => {if (active) setError(`Could not inspect proposal consequences: ${e.message}`);});
+    return () => {active = false;};
+  }, [job?.id, job?.status]);
   useEffect(() => {
     let active = true;
     api('/agent/status').then(async value => {
@@ -42,7 +55,7 @@ export default function AgentWork({ id, dirty, onApplied }) {
   }, [job?.id, job?.status]);
   async function start(event) {
     event.preventDefault(); setBusy(true); setError('');
-    try { const value = await api('/agent/jobs',{projectId:id,request:prompt}); setJob(value); setOpen(false); try {sessionStorage.setItem(`unforge-job-${id}`,value.id);} catch {} }
+    try { const value = await api('/agent/jobs',{projectId:id,request:prompt,operationId:operationKey(`agent-${id}`,{request:prompt})}); setJob(value); setOpen(false); finishOperation(`agent-${id}`); try {sessionStorage.setItem(`unforge-job-${id}`,value.id);} catch {} }
     catch(e) { setError(e.message); } finally {setBusy(false);}
   }
   async function cancel() {setBusy(true); try {setJob(await api(`/agent/jobs/${job.id}/cancel`,{}));} catch(e) {setError(e.message);} finally {setBusy(false);}}
@@ -55,14 +68,15 @@ export default function AgentWork({ id, dirty, onApplied }) {
     {error && <p role="alert" className="error">{error}</p>}
     {job && <article className="job"><div className="section-heading"><div><h3>{job.status === 'completed' && !job.changedFiles?.length ? 'Codex finished without file changes' : labels[job.status] || job.status}</h3><p>{job.request}</p></div>{job.status === 'running' && <button className="secondary" disabled={busy} onClick={cancel}>Stop work</button>}</div>
       {job.error && <p className="error">{job.error}</p>}
+      {job.archived && <p className="note">{job.note || 'Only the durable receipt remains. Proposals and logs from previous sessions are not retained.'}</p>}
       {job.changedFiles?.length > 0 && <p>{job.changedFiles.length} changed file{job.changedFiles.length === 1 ? '' : 's'} in this proposal.</p>}
       {agentExplanation(job.output) && <div className="agent-explanation"><h3>From Codex</h3><p>{agentExplanation(job.output)}</p></div>}
       {job.diff && <details open className="diff"><summary>Review proposed changes</summary><pre>{job.diff}</pre></details>}
       <details><summary>Agent output{job.outputTruncated ? ' (truncated)' : ''}</summary><pre className="agent-output">{job.output || 'Waiting for output…'}</pre></details>
-      {job.status === 'completed' && <><p className="note">Review the changes and any checks Codex reports before applying. Applying updates your local files; publishing is a separate step.</p><button disabled={dirty || busy || !job.changedFiles?.length} onClick={() => setReviewApply(true)}>Bring these changes into my project<Icon name="check"/></button></>}
+      {job.status === 'completed' && <><Consequences compact report={impact}/>{!impact && <p className="note">Proposal consequences have not loaded. <button className="text-button" onClick={() => api(`/agent/jobs/${job.id}/consequences`).then(setImpact).catch(e => setError(e.message))}>Retry inspection</button></p>}<p className="note">Review the consequences, changes, and any checks Codex reports before applying. Applying updates your local files; publishing is a separate step.</p><button disabled={dirty || busy || !impact || !job.changedFiles?.length} onClick={() => setReviewApply(true)}>Bring these changes into my project<Icon name="check"/></button></>}
       {job.status === 'applied' && <p className="notice">Changes are in your working files. Try them, then save a version when you want to keep them.</p>}
     </article>}
-    {open && <Modal title="What should Codex work on?" busy={busy} onClose={() => setOpen(false)}><form onSubmit={start}><label>Describe the outcome<textarea autoFocus rows={5} required maxLength={8000} value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="Make this page useful for planning my week. Keep it simple, readable, and local."/></label><p className="note">Your request and relevant project context go through your configured Codex account. Codex works on a separate copy. Review its proposal before changing your project.</p>{error && <p role="alert" className="error">{error}</p>}<div className="form-actions"><button type="button" className="secondary" onClick={() => setOpen(false)} disabled={busy}>Cancel</button><button disabled={busy || !prompt.trim()}>{busy ? 'Starting…' : 'Start Codex'}</button></div></form></Modal>}
+    {open && <Modal title="What should Codex work on?" busy={busy} onClose={() => setOpen(false)}><form onSubmit={start}><label>Describe the outcome<textarea autoFocus rows={9} required maxLength={8000} value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="Make this page useful for planning my week. Keep it simple, readable, and local."/></label><p className="note">Your request and relevant project context go through your configured Codex account. This uses one shared local attempt and your account’s usage allowance.</p>{dirty && <p className="notice">Save a version before starting. You can write this as a portable request instead.</p>}{error && <p role="alert" className="error">{error}</p>}<div className="form-actions"><button type="button" className="secondary" onClick={() => setOpen(false)} disabled={busy}>Cancel</button><button type="button" className="secondary" disabled={busy || !prompt.trim()} onClick={async () => {setBusy(true);setError('');let done = false;try {await api(`/projects/${id}/request`,{message:prompt});done = true;setOpen(false);await onApplied();} catch(e) {setError(done ? `Request written. Refresh the project: ${e.message}` : e.message);} finally {setBusy(false);}}}>Write request only</button><button disabled={busy || dirty || !status?.available || !prompt.trim()}>{busy ? 'Starting…' : 'Start Codex'}</button></div></form></Modal>}
     {reviewApply && <Modal title="Bring this proposal into your project?" busy={busy} onClose={() => setReviewApply(false)}><p>This updates your working files with the reviewed proposal. Your saved history remains available. Nothing is deployed.</p>{error && <p role="alert" className="error">{error}</p>}<div className="form-actions"><button className="secondary" disabled={busy} onClick={() => setReviewApply(false)}>Cancel</button><button disabled={busy} onClick={apply}>{busy ? 'Applying…' : 'Apply proposal'}</button></div></Modal>}
   </section>;
 }

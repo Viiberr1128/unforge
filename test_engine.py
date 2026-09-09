@@ -53,6 +53,43 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(Problem):
             self.engine.save(self.pid, 'Do not snapshot symlinks')
 
+    def test_import_refuses_case_unicode_and_file_directory_aliases_before_checkout(self):
+        root = self.engine.root(self.pid)
+        blob = self.engine.git(root, 'rev-parse', 'HEAD:README.md').decode().strip()
+        directory = self.engine.git(root, 'rev-parse', 'HEAD:.unforge').decode().strip()
+        original = self.engine.git(root, 'rev-parse', 'HEAD').decode().strip()
+        cases = [
+            [('100644', 'Foo', blob), ('100644', 'foo', blob)],
+            [('100644', 'caf\u00e9', blob), ('100644', 'cafe\u0301', blob)],
+            [('100644', 'Cache', blob), ('40000', 'cache', directory)],
+            [('40000', 'First', directory), ('40000', 'first', directory)],
+        ]
+        for entries in cases:
+            with self.subTest(entries=[entry[1] for entry in entries]):
+                # Create the Git tree directly: the host filesystem itself may
+                # not support writing both aliases, which is the bug under test.
+                records = [('40000', '.unforge', directory), *entries]
+                records.sort(key=lambda value: (value[1] + ('/' if value[0] == '40000' else '')).encode())
+                raw = b''.join(mode.encode() + b' ' + name.encode() + b'\0' + bytes.fromhex(oid)
+                               for mode, name, oid in records)
+                tree_file = Path(self.temp.name) / 'tree-object'
+                tree_file.write_bytes(raw)
+                tree = self.engine.git(root, 'hash-object', '-w', '-t', 'tree', str(tree_file)).decode().strip()
+                commit = self.engine.git(root, 'commit-tree', tree, '-p', original, '-m', 'Cross-platform aliases').decode().strip()
+                self.engine.git(root, 'update-ref', 'refs/heads/main', commit)
+                bundle = Path(self.temp.name) / 'aliases.bundle'
+                bundle.write_bytes(self.engine.export(self.pid))
+                with self.assertRaisesRegex(Problem, 'collide by case or Unicode'):
+                    self.engine.import_bundle(str(bundle))
+                self.assertEqual(len(self.engine.projects()), 1)
+                self.assertEqual((root / 'README.md').read_text(), '# Garden\n\nA small personal project\n')
+
+    def test_validate_tree_allows_shared_directory_prefixes(self):
+        self.engine.edit(self.pid, 'src/first.txt', 'First')
+        self.engine.edit(self.pid, 'src/second.txt', 'Second')
+        self.engine.save(self.pid, 'Add files in one directory')
+        self.assertEqual(self.engine.validate_tree(self.engine.root(self.pid), 'HEAD')['name'], 'Garden')
+
     def test_request_is_explicit_handoff(self):
         detail = self.engine.request(self.pid, 'Add a checklist')
         request = next(f for f in detail['files'] if f['path'].startswith('.unforge/requests/'))
@@ -253,7 +290,7 @@ class EngineTests(unittest.TestCase):
                 return status, data
             status, health = call('GET', '/api/health')
             self.assertEqual(status, 200)
-            self.assertEqual(json.loads(health), {'ok': True, 'version': '0.1.0'})
+            self.assertEqual(json.loads(health), {'ok': True, 'version': '0.2.0'})
             status, data = call('GET', '/api/session')
             self.assertEqual(status, 200)
             token = json.loads(data)['token']

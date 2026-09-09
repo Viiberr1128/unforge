@@ -92,7 +92,7 @@ def smoke(archive):
         marker = base / 'unexpected-node-call'
         bin_dir = base / 'bin'
         bin_dir.mkdir()
-        for command in ('node', 'npm', 'npx'):
+        for command in ('node', 'npm', 'npx', 'codex'):
             stub = bin_dir / command
             stub.write_text('#!/bin/sh\nprintf called > "$UNFORGE_SMOKE_NODE_MARKER"\nexit 97\n', encoding='utf-8')
             stub.chmod(0o755)
@@ -134,9 +134,13 @@ def smoke(archive):
                 for asset in assets:
                     require(get(asset.decode())[0] == 200, 'Built asset missing')
 
-                def cli(*args):
+                def cli_result(*args):
                     result = subprocess.run([sys.executable, str(root / 'unforge.py'), '--port', str(port), *args],
                                             cwd=root, env=env, capture_output=True, text=True, timeout=45)
+                    return result
+
+                def cli(*args):
+                    result = cli_result(*args)
                     require(result.returncode == 0, 'CLI failed: ' + result.stderr)
                     return json.loads(result.stdout)
                 project = cli('create', 'Release smoke', '--description', 'Independent artifact verification')
@@ -161,13 +165,65 @@ def smoke(archive):
                                         env=git_env, capture_output=True, text=True, timeout=30)
                 require(result.returncode == 0, 'Ordinary Git recovery failed: ' + result.stderr)
                 require((clone / 'README.md').read_text(encoding='utf-8') == '# Release smoke\n\nIndependent artifact verification\n', 'Recovered content differs')
-                require(not marker.exists(), 'Built startup invoked Node/npm/npx')
+
+                care = cli('care', pid)
+                require(care['revision'] is None, 'New project unexpectedly has a care document')
+                document = care['document']
+                document['brief']['purpose'] = 'Keep source and my declared local attachments recoverable.'
+                care_file = base / 'care.json'
+                care_file.write_text(json.dumps(document), encoding='utf-8')
+                care = cli('care-save', pid, '--from-file', str(care_file), '--revision', 'null')
+                require(care['document']['brief']['purpose'] == document['brief']['purpose'], 'Care purpose was not saved')
+                require(cli('consequences', pid)['scope'] == 'source', 'Consequence report did not describe source')
+                require(document['brief']['purpose'] in cli('simplify', pid)['request'], 'Simplification lost the project purpose')
+                handoff = base / 'handoff.md'
+                cli('handoff', pid, '--output', str(handoff))
+                require(document['brief']['purpose'] in handoff.read_text(encoding='utf-8'), 'Handoff lost project purpose')
+                text.write_text('uploads/\n', encoding='utf-8')
+                cli('write', pid, '.gitignore', '--from-file', str(text))
+                saved = cli('save', pid, 'Save recovery purpose and asset boundary')
+                uploads = Path(project['path']) / 'uploads'
+                uploads.mkdir()
+                (uploads / 'attachment.txt').write_text('This attachment belongs in recovery.', encoding='utf-8')
+                assets_file = base / 'assets.json'
+                assets_file.write_text(json.dumps([{'path': 'uploads', 'kind': 'directory'}]), encoding='utf-8')
+                capsule = cli('recovery-create', pid, '--assets-file', str(assets_file))
+                require(not capsule['sourceOnly'] and capsule['sourceHead'] == saved['history'][0]['id'], 'Capsule lost source or declared data')
+                rehearsal = cli('recovery-rehearse', pid, capsule['id'])
+                require(rehearsal['ok'] and rehearsal['capsuleSha256'] == capsule['sha256'], 'Rehearsal did not verify this capsule')
+                archive_output = base / 'recovery.tar.gz'
+                cli('recovery-download', pid, capsule['id'], '--output', str(archive_output))
+                require(hashlib.sha256(archive_output.read_bytes()).hexdigest() == capsule['sha256'], 'Downloaded capsule checksum differs')
+                recovered = cli('recovery-import', str(archive_output))
+                require(recovered['id'] != pid, 'Recovery overwrote the existing project')
+                require((Path(recovered['path']) / 'uploads/attachment.txt').read_text(encoding='utf-8') == 'This attachment belongs in recovery.', 'Recovery lost declared attachment')
+                require(cli('retirement', pid)['canComplete'], 'Completed local retirement inventory was not recognized')
+                retired = cli('retire', pid, capsule['id'], '--revision', care['revision'], '--note', 'Local example rehearsed without external resources.')
+                require(retired['document']['retirement']['state'] == 'complete', 'Local retirement evidence was not recorded')
+
+                allowance = cli('operations')
+                settings = cli('allowance', '0', '--revision', str(allowance['settings']['revision']))
+                payload_file = base / 'practice.json'
+                payload_file.write_text(json.dumps({'example': 'Local practice only'}), encoding='utf-8')
+                practice_args = ('practice', pid, 'email', '--operation-id', 'smoke-once', '--from-file', str(payload_file))
+                stopped = cli_result(*practice_args)
+                require(stopped.returncode == 1 and 'allowance reached' in json.loads(stopped.stderr)['error'], 'Zero allowance did not reject a new attempt')
+                cli('allowance', '2', '--revision', str(settings['revision']))
+                first_practice = cli(*practice_args)
+                repeated_practice = cli(*practice_args)
+                require(first_practice['result']['simulated'] and repeated_practice['replayed'], 'Practice receipt was not simulated and replayable')
+                require(first_practice['result'] == repeated_practice['result'] and cli('operations')['usedToday'] == 1,
+                        'Replaying the same operation consumed another attempt')
+                require(not marker.exists(), 'Built workflow invoked Node/npm/npx/Codex')
             finally:
                 stop_group(process)
                 process = None
         return {'archive': str(archive), 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
                 'manifestFiles': entries, 'checks': ['manifest', 'built-start-no-node', 'health', 'ui-assets',
-                'create', 'edit', 'save', 'restore', 'export', 'import', 'ordinary-git-recovery', 'process-group-cleanup']}
+                'create', 'edit', 'save', 'restore', 'export', 'import', 'ordinary-git-recovery',
+                'care-and-handoff', 'source-consequences', 'simplification-request', 'recovery-with-assets',
+                'rehearsal', 'capsule-checksum', 'capsule-import', 'local-retirement-record',
+                'zero-attempt-cap', 'practice-replay-once', 'no-model-call', 'process-group-cleanup']}
 
 
 def main():

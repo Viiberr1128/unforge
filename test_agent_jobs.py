@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from agent_jobs import AgentJobs, MAX_LOG, VERIFICATION_CACHES, agent_environment
 from engine import Engine, Problem
+from operations import Operations
 
 
 FAKE = r'''
@@ -300,6 +301,124 @@ class AgentJobsTests(unittest.TestCase):
         self.assertEqual(self.jobs.get(job['id'])['status'], 'cancelled')
         with self.assertRaisesRegex(Problem, 'closed'):
             self.jobs.start(self.pid, 'change')
+
+
+class AgentAllowanceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp.name)
+        self.engine = Engine(self.base / 'projects')
+        self.project = self.engine.create('Garden')
+        self.pid = self.project['id']
+        self.root = self.engine.root(self.pid)
+        self.fake = self.base / 'fake-codex'
+        self.fake.write_text('#!' + sys.executable + '\n' + FAKE)
+        self.fake.chmod(0o755)
+        self.ledger = Operations(self.engine.home)
+        self.jobs = AgentJobs(self.engine, executable=str(self.fake), timeout_seconds=10, operations=self.ledger)
+
+    def tearDown(self):
+        self.jobs.close()
+        self.ledger.close()
+        self.temp.cleanup()
+
+    finish = AgentJobsTests.finish
+
+    def test_known_replay_returns_same_proposal_without_consuming_allowance(self):
+        first = self.finish(self.jobs.start(self.pid, 'change', 'request-1'))
+        second = self.jobs.start(self.pid, 'change', 'request-1')
+        self.assertTrue(second['replayed'])
+        self.assertEqual(second['id'], first['id'])
+        self.assertEqual(second['diff'], first['diff'])
+        self.assertEqual(self.ledger.overview()['usedToday'], 1)
+        self.assertEqual(self.ledger.get('request-1')['state'], 'succeeded')
+        with self.assertRaisesRegex(Problem, 'already bound'):
+            self.jobs.start(self.pid, 'different request', 'request-1')
+
+    def test_replay_while_running_returns_same_job(self):
+        first = self.jobs.start(self.pid, 'sleep', 'request-1')
+        replay = self.jobs.start(self.pid, 'sleep', 'request-1')
+        self.assertEqual(replay['id'], first['id'])
+        self.assertEqual(replay['status'], 'running')
+        self.assertTrue(replay['replayed'])
+        self.jobs.cancel(first['id'])
+        self.assertEqual(self.ledger.overview()['usedToday'], 1)
+
+    def test_budget_is_shared_between_projects_and_persists(self):
+        self.ledger.configure(1, 1)
+        self.finish(self.jobs.start(self.pid, 'change', 'request-1'))
+        other = self.engine.create('Other')
+        with self.assertRaisesRegex(Problem, 'allowance reached'):
+            self.jobs.start(other['id'], 'change', 'request-2')
+        self.assertEqual(self.ledger.overview()['usedToday'], 1)
+        self.assertEqual(len(self.jobs.status()['recentJobs']), 1)
+
+    def test_three_empty_attempts_pause_and_explicit_resume_allows_next(self):
+        for index in range(3):
+            job = self.finish(self.jobs.start(self.pid, 'noop', 'empty-' + str(index)))
+            self.assertEqual(job['status'], 'completed')
+            self.assertEqual(job['operationState'], 'empty')
+        with self.assertRaisesRegex(Problem, 'paused'):
+            self.jobs.start(self.pid, 'change', 'after-empty')
+        self.ledger.resume(self.pid)
+        job = self.finish(self.jobs.start(self.pid, 'change', 'after-empty'))
+        self.assertEqual(job['operationState'], 'succeeded')
+
+    def test_preflight_errors_do_not_spend_an_attempt(self):
+        with self.assertRaises(Problem):
+            self.jobs.start(self.pid, '', 'invalid')
+        self.engine.edit(self.pid, 'README.md', 'Not saved')
+        with self.assertRaisesRegex(Problem, 'Save your current'):
+            self.jobs.start(self.pid, 'change', 'dirty')
+        self.engine.save(self.pid, 'Save')
+        self.jobs.executable = str(self.base / 'missing')
+        with self.assertRaisesRegex(Problem, 'not installed'):
+            self.jobs.start(self.pid, 'change', 'missing')
+        self.jobs.executable = str(self.fake)
+        self.engine.edit(self.pid, '.codex/config.toml', 'model="unexpected"')
+        self.engine.save(self.pid, 'Config')
+        with self.assertRaisesRegex(Problem, 'runtime configuration'):
+            self.jobs.start(self.pid, 'change', 'config')
+        self.assertEqual(self.ledger.overview()['usedToday'], 0)
+
+    def test_restart_returns_archived_receipt_even_without_cli_or_with_dirty_project(self):
+        first = self.finish(self.jobs.start(self.pid, 'change', 'request-1'))
+        self.jobs.close()
+        self.ledger.close()
+        self.ledger = Operations(self.engine.home)
+        self.jobs = AgentJobs(self.engine, executable=str(self.base / 'missing'), operations=self.ledger)
+        self.engine.edit(self.pid, 'README.md', 'New unsaved work')
+        replay = self.jobs.start(self.pid, 'change', 'request-1')
+        self.assertEqual(replay['id'], first['id'])
+        self.assertEqual(replay['status'], 'archived')
+        self.assertEqual(replay['operationState'], 'succeeded')
+        self.assertFalse(replay['proposalAvailable'])
+        self.assertEqual(replay['recordedResult']['changedFileCount'], 3)
+        self.assertEqual(self.jobs.get(first['id']), replay)
+        self.assertEqual(self.jobs.status()['recentJobs'][0]['id'], first['id'])
+        self.assertEqual(self.ledger.overview()['usedToday'], 1)
+
+    def test_unknown_interrupted_attempt_never_invokes_cli_again(self):
+        abandoned = Operations(self.engine.home)
+        abandoned.reserve(self.pid, 'interrupted', 'agent', {'request': 'change'}, reference_id='a' * 32,
+                          initial_result={'jobStatus': 'running', 'baseVersion': self.project['history'][0]['id']})
+        abandoned.close()
+        with patch.object(self.jobs, '_command', side_effect=AssertionError('Replay must not reach CLI preflight')):
+            replay = self.jobs.start(self.pid, 'change', 'interrupted')
+        self.assertEqual(replay['status'], 'unknown')
+        self.assertEqual(replay['operationState'], 'unknown')
+        self.assertTrue(replay['replayed'])
+        self.assertFalse(self.engine.detail(self.pid)['dirty'])
+        self.assertEqual(self.ledger.overview()['usedToday'], 1)
+
+    def test_thread_launch_failure_is_recorded_and_execution_lock_is_released(self):
+        with patch('threading.Thread.start', side_effect=RuntimeError('Cannot start thread')):
+            with self.assertRaisesRegex(RuntimeError, 'Cannot start'):
+                self.jobs.start(self.pid, 'change', 'thread-error')
+        self.assertEqual(self.ledger.get('thread-error')['state'], 'failed')
+        self.assertEqual(self.jobs.start(self.pid, 'change', 'thread-error')['status'], 'archived')
+        job = self.finish(self.jobs.start(self.pid, 'change', 'next'))
+        self.assertEqual(job['status'], 'completed', job['error'])
 
 
 if __name__ == '__main__':

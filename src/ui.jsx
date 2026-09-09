@@ -21,7 +21,7 @@ export function Modal({ title, children, onClose, busy }) {
   }, []);
   return <dialog ref={ref} onCancel={event => { event.preventDefault(); if (!busy) onClose(); }} aria-labelledby="modal-title">
     <div className="modal-head"><h2 id="modal-title">{title}</h2><button className="icon-button" aria-label="Close dialog" onClick={onClose} disabled={busy}><Icon name="close"/></button></div>
-    {children}
+    <fieldset className="modal-content" disabled={busy}>{children}</fieldset>
   </dialog>;
 }
 

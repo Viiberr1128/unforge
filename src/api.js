@@ -1,7 +1,7 @@
 let token;
-export async function importBundle(file) {
+export async function importBundle(file, capsule = false) {
   if (!token) token = (await api('/session')).token;
-  const response = await fetch('/api/import-bundle', {
+  const response = await fetch(capsule ? '/api/import-capsule' : '/api/import-bundle', {
     method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Unforge-Token': token }, body: file,
   });
   const result = await response.json();

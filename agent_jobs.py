@@ -17,6 +17,7 @@ import time
 import uuid
 
 from engine import MAX_TEXT, Problem
+from operations import OperationError
 
 MAX_LOG = 128 * 1024
 MAX_PATCH = 512 * 1024
@@ -45,10 +46,11 @@ class AgentJobs:
     and tests, never request parameters. Existing Codex account auth is used;
     installed CLI presence is not an assertion that authentication works.
     """
-    def __init__(self, engine, *, executable=None, timeout_seconds=900):
+    def __init__(self, engine, *, executable=None, timeout_seconds=900, operations=None):
         self.engine = engine
         self.executable = executable
         self.timeout_seconds = max(0.1, min(float(timeout_seconds), 900))
+        self.operations = operations
         self._jobs = {}
         self._lock = threading.RLock()
         self._closed = False
@@ -59,12 +61,49 @@ class AgentJobs:
     def status(self):
         with self._lock:
             active = next((job['id'] for job in self._jobs.values() if job['status'] == 'running'), None)
+            recent = [{key: job[key] for key in ('id', 'projectId', 'status')}
+                      for job in reversed(list(self._jobs.values()))][:32]
+            if self.operations:
+                known = {item['id'] for item in recent}
+                for record in self._ledger('overview')['operations']:
+                    if record['kind'] == 'agent' and record['referenceId'] and record['referenceId'] not in known:
+                        saved = self._durable_job(record)
+                        recent.append({key: saved[key] for key in ('id', 'projectId', 'status')})
+                        known.add(saved['id'])
             return dict(available=bool(self._command()), provider='codex', activeJob=active,
-                        recentJobs=[{key: job[key] for key in ('id', 'projectId', 'status')}
-                                    for job in reversed(list(self._jobs.values()))][:32],
+                        recentJobs=recent[:32],
                         timeoutSeconds=self.timeout_seconds, logLimitBytes=MAX_LOG,
                         authentication='Not checked. Uses your existing Codex account.',
+                        localAllowance=bool(self.operations),
                         note='Starting a job uses your Codex allowance. No API keys are collected.')
+
+    def _ledger(self, method, *args, **kwargs):
+        try:
+            return getattr(self.operations, method)(*args, **kwargs)
+        except OperationError as exc:
+            raise Problem(str(exc)) from exc
+
+    def _durable_job(self, record):
+        result = record['result'] if isinstance(record['result'], dict) else {}
+        while 'previousResult' in result and isinstance(result['previousResult'], dict):
+            result = result['previousResult']
+        state = record['state']
+        status = 'unknown' if state == 'unknown' else 'running' if state == 'running' else 'archived'
+        note = ('This attempt is still owned by another local session. It will not be repeated.' if state == 'running'
+                else 'The execution owner stopped before recording an outcome. Reconcile this operation before deciding what to do next. It will not be repeated.' if state == 'unknown'
+                else 'This is a saved attempt receipt. Its proposal and logs belonged to a previous session and are no longer available. This operation was not repeated.')
+        return dict(id=record['referenceId'], projectId=record['projectId'], request='Earlier Codex attempt',
+                    provider='codex', status=status, baseVersion=result.get('baseVersion'),
+                    createdAt=record['createdAt'], finishedAt=result.get('finishedAt'),
+                    exitCode=result.get('exitCode'), output='', outputTruncated=False, diff='', changedFiles=[],
+                    error=result.get('error'), note=note, archived=True, replayed=True,
+                    operationId=record['operationId'], operationState=state, recordedResult=result,
+                    proposalAvailable=False)
+
+    def _replayed(self, record):
+        if record['referenceId'] in self._jobs:
+            return dict(self._public(self._jobs[record['referenceId']]), replayed=True)
+        return self._durable_job(record)
 
     def _public(self, job):
         return copy.deepcopy({key: value for key, value in job.items() if not key.startswith('_')})
@@ -76,6 +115,12 @@ class AgentJobs:
 
     def get(self, jobid):
         with self._lock:
+            if not isinstance(jobid, str):
+                raise Problem('Unknown agent job')
+            if jobid not in self._jobs and self.operations:
+                record = self._ledger('by_reference', jobid)
+                if record and record['kind'] == 'agent':
+                    return self._durable_job(record)
             return self._public(self._job(jobid))
 
     def _execution_lock(self):
@@ -133,12 +178,21 @@ class AgentJobs:
                 files[path] = (hashlib.sha256(data).hexdigest(), mode)
         return files
 
-    def start(self, pid, request_text):
+    def start(self, pid, request_text, operation_id=None):
         if not isinstance(request_text, str) or not request_text.strip() or len(request_text) > 8000:
             raise Problem('Request must contain 1–8000 characters')
         with self._lock, self.engine.lock:
             if self._closed:
                 raise Problem('Agent service is closed')
+            request_text = request_text.strip()
+            operation_id = operation_id if operation_id is not None else uuid.uuid4().hex
+            payload = {'request': request_text}
+            if self.operations:
+                previous = self._ledger('lookup', pid, operation_id, 'agent', payload)
+                if previous:
+                    return self._replayed(previous)
+            elif operation_id is not None and not isinstance(operation_id, str):
+                raise Problem('Operation ID must be text')
             executable = self._command()
             if not executable:
                 raise Problem('Codex CLI is not installed or is not on PATH. Install and sign in to Codex first.')
@@ -153,6 +207,8 @@ class AgentJobs:
             execution_lock = self._execution_lock()
             temporary = tempfile.TemporaryDirectory(prefix='unforge-agent-')
             work = Path(temporary.name) / 'work'
+            reservation = None
+            jobid = uuid.uuid4().hex
             try:
                 self.engine.git(root, 'clone', '--no-hardlinks', '--no-checkout', '--template=', '--', str(root), str(work))
                 self.engine.git(work, 'checkout', '--detach', base)
@@ -173,13 +229,21 @@ class AgentJobs:
                           'User request:\n' + request_text.strip() + '\n')
                 prompt_file = Path(temporary.name) / 'prompt.txt'
                 prompt_file.write_text(prompt, encoding='utf-8')
-                jobid = uuid.uuid4().hex
                 job = dict(id=jobid, projectId=pid, request=request_text.strip(), provider='codex',
                            status='running', baseVersion=base, createdAt=now(), finishedAt=None,
                            exitCode=None, output='', outputTruncated=False, diff='', changedFiles=[],
                            error=None, note=PROOF_NOTE, _temporary=temporary, _work=work,
                            _baseline=baseline, _bundle=bundle, _bundle_hash=bundle_hash,
                            _cancel=threading.Event(), _done=threading.Event(), _execution_lock=execution_lock)
+                if self.operations:
+                    reservation = self._ledger('reserve', pid, operation_id, 'agent', payload,
+                                               reference_id=jobid,
+                                               initial_result={'jobStatus': 'running', 'baseVersion': base})
+                    if reservation['replayed']:
+                        temporary.cleanup()
+                        execution_lock.close()
+                        return self._replayed(reservation)
+                    job.update(operationId=operation_id, operationState='running', replayed=False)
                 self._jobs[jobid] = job
                 thread = threading.Thread(target=self._run, args=(job, executable, prompt_file),
                                           name='unforge-agent-' + jobid[:8], daemon=False)
@@ -187,8 +251,16 @@ class AgentJobs:
                 thread.start()
                 return self._public(job)
             except Exception:
-                temporary.cleanup()
-                execution_lock.close()
+                self._jobs.pop(jobid, None)
+                try:
+                    if reservation and not reservation['replayed']:
+                        self._ledger('finish', operation_id, 'failed',
+                                     {'jobStatus': 'failed', 'message': 'Local execution could not be started.'})
+                finally:
+                    try:
+                        temporary.cleanup()
+                    finally:
+                        execution_lock.close()
                 raise
 
     @staticmethod
@@ -333,6 +405,18 @@ class AgentJobs:
                 job['output'] = log.decode('utf-8', errors='replace')
                 job['status'] = terminal
                 job['finishedAt'] = now()
+                if self.operations:
+                    outcome = 'succeeded' if terminal == 'completed' and job['diff'] else 'empty' if terminal == 'completed' else 'failed'
+                    result = dict(jobStatus=terminal, baseVersion=job['baseVersion'], finishedAt=job['finishedAt'],
+                                  exitCode=job['exitCode'], changedFileCount=len(job['changedFiles']), error=job['error'])
+                    try:
+                        self._ledger('finish', job['operationId'], outcome, result)
+                        job['operationState'] = outcome
+                    except Exception as exc:
+                        # Never claim a durable receipt when its write failed. A
+                        # restart will recover the still-running row as unknown.
+                        job['operationState'] = 'unknown'
+                        job['error'] = 'The attempt ended, but its durable outcome could not be recorded: ' + str(exc)[:500]
                 job['_done'].set()
 
     def _proposal(self, job):
