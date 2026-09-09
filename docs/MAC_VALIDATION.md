@@ -10,6 +10,12 @@
 - Two real incremental copies added 129,424,364 bytes then 241,045 bytes, with 129,420,467 bytes reused on the second. Both remain independently selectable recovery points within the complete shared vault.
 - These are tests on one Apple Silicon Mac. Independent second-device account sign-in, hosted databases, public deployments, and full application behavior were not established by file recovery. Private paths, keys and project data are excluded from this public validation record.
 
+## Installed 0.3 package
+
+The frozen engine ran with only system executable directories on PATH. Bundled helpers, a static app through the frozen runtime worker, incremental backup, separate restore, and clean parent-pipe shutdown passed. The installed native app opened the real recovered workspace, displayed its five projects with matching saved versions, and returned to the original workspace. Recovered applications and backup schedules did not start automatically.
+
+The first scheduled iCloud copy in the installed app reached macOS's per-application cloud-access prompt. Source-process iCloud recovery proof does not grant that permission to a newly installed app. macOS requires its **Allow** action before the native app can finish that first cloud publication. This is recorded separately from the successful source-process cloud recovery and packaged local-backup proof.
+
 ## Earlier native shell validation
 
 

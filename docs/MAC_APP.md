@@ -162,3 +162,5 @@ updater, telemetry, login item, or paid background service installed by this
 package.
 
 Vaults roll over before their inventories exceed supported cloud checks. Each new vault stores a fresh seed and preserves prior vaults. This bounds per-vault inventories; it does not cap total retained storage or automatically delete history.
+
+On first use of iCloud Drive, macOS may ask whether Unforge can access iCloud Drive. Choose **Allow** to let the backup finish. Folder copies made earlier by another application do not grant Unforge this per-app permission. A denied or unanswered prompt is not a completed backup.
