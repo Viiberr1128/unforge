@@ -14,7 +14,7 @@ import threading
 import unicodedata
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit, unquote
+from urllib.parse import urlsplit, unquote, parse_qs
 
 MAX_BODY = 512 * 1024
 MAX_TEXT = 128 * 1024
@@ -35,6 +35,7 @@ class Engine:
                    GIT_TERMINAL_PROMPT='0', GIT_ATTR_NOSYSTEM='1')
         result = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
             '-c', 'user.name=Unforge Local', '-c', 'user.email=local@unforge.invalid',
+            '-c', 'core.fsync=committed', '-c', 'core.fsyncMethod=fsync',
             '-c', 'commit.gpgsign=false', *args], cwd=root, env=env, capture_output=True, timeout=30)
         if result.returncode not in allowed_returncodes:
             raise Problem(result.stderr.decode(errors='replace').strip() or 'Git operation failed')
@@ -56,21 +57,31 @@ class Engine:
         marker = root / '.unforge' / 'project.json'
         if marker.is_symlink() or marker.parent.is_symlink():
             raise Problem('Invalid project metadata')
-        data = json.loads(marker.read_text(encoding='utf-8'))
+        with marker.open('rb') as source: raw = source.read(MAX_TEXT + 1)
+        if len(raw) > MAX_TEXT: raise Problem('Project metadata exceeds its size limit. Its folder has been preserved.')
+        try: data = json.loads(raw)
+        except (ValueError, UnicodeError, RecursionError) as error:
+            raise Problem('Project metadata is damaged. Its folder has been preserved.') from error
         if not isinstance(data, dict) or not isinstance(data.get('name'), str) or not isinstance(data.get('description'), str):
             raise Problem('Invalid project metadata')
         return data
 
-    def projects(self):
-        items = []
+    def project_inventory(self):
+        items, problems = [], []
         for child in sorted(self.home.iterdir()):
+            if not re.fullmatch(r'[a-f0-9]{32}', child.name): continue
             try:
                 root = self.root(child.name)
                 data = self.metadata(root)
-                items.append(dict(id=child.name, name=data['name'], description=data['description'], path=str(root), updatedAt=self.history(root)[0]['date']))
-            except (Problem, OSError, ValueError, KeyError):
-                continue
-        return items
+                history = self.history(root, limit=1)
+                if not history: raise Problem('No saved history is available. The project folder has been preserved.')
+                items.append(dict(id=child.name, name=data['name'], description=data['description'], path=str(root), updatedAt=history[0]['date']))
+            except (Problem, OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError) as error:
+                problems.append(dict(id=child.name, path=str(child), error=str(error)[:500]))
+        return dict(projects=items, problems=problems)
+
+    def projects(self):
+        return self.project_inventory()['projects']
 
     def create(self, name, description=''):
         if not isinstance(name, str) or not name.strip() or len(name) > 120:
@@ -79,16 +90,29 @@ class Engine:
             raise Problem('Description is too long')
         with self.lock:
             pid = uuid.uuid4().hex
-            root = self.home / pid
-            root.mkdir()
-            (root / '.unforge').mkdir()
-            (root / '.unforge' / 'project.json').write_text(json.dumps(dict(name=name.strip(), description=description, schemaVersion=1)), encoding='utf-8')
-            self.git(root, 'init', '--template=', '-b', 'main')
-            (root / 'README.md').write_text(f'# {name.strip()}\n\n{description}\n', encoding='utf-8')
-            import html
-            (root / 'index.html').write_text('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + html.escape(name) + '</title><style>body{font:18px system-ui;background:#f6f4ef;color:#25372f;padding:8vw;max-width:800px}h1{font-size:3rem}p{line-height:1.7}</style><h1>' + html.escape(name) + '</h1><p>' + html.escape(description or 'Your locally owned project starts here.') + '</p></html>', encoding='utf-8')
-            self.git(root, 'add', '--', 'README.md', 'index.html', '.unforge/project.json')
-            self.git(root, 'commit', '-m', 'Create project')
+            final = self.home / pid
+            root = Path(tempfile.mkdtemp(prefix=".creating-", dir=self.home))
+            try:
+                (root / '.unforge').mkdir()
+                (root / '.unforge' / 'project.json').write_text(json.dumps(dict(name=name.strip(), description=description, schemaVersion=1)), encoding='utf-8')
+                self.git(root, 'init', '--template=', '-b', 'main')
+                (root / 'README.md').write_text(f'# {name.strip()}\n\n{description}\n', encoding='utf-8')
+                import html
+                (root / 'index.html').write_text('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + html.escape(name) + '</title><style>body{font:18px system-ui;background:#f6f4ef;color:#25372f;padding:8vw;max-width:800px}h1{font-size:3rem}p{line-height:1.7}</style><h1>' + html.escape(name) + '</h1><p>' + html.escape(description or 'Your locally owned project starts here.') + '</p></html>', encoding='utf-8')
+                self.git(root, 'add', '--', 'README.md', 'index.html', '.unforge/project.json')
+                self.git(root, 'commit', '-m', 'Create project')
+                for file in (root / 'README.md', root / 'index.html', root / '.unforge/project.json'):
+                    with file.open('rb') as saved: os.fsync(saved.fileno())
+                for directory in (root / '.unforge', root):
+                    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                    try: os.fsync(descriptor)
+                    finally: os.close(descriptor)
+                os.rename(root, final)
+                descriptor = os.open(self.home, os.O_RDONLY | os.O_DIRECTORY)
+                try: os.fsync(descriptor)
+                finally: os.close(descriptor)
+            finally:
+                if root.exists(): shutil.rmtree(root)
             return self.detail(pid)
 
     def import_bundle(self, path, name=None):
@@ -168,10 +192,13 @@ class Engine:
             raise Problem('File path escapes project')
         return target
 
-    def history(self, root):
-        raw = self.git(root, 'log', '-100', '-z', '--format=%H%x00%s%x00%cI').decode('utf-8', errors='replace').rstrip('\0')
+    def history(self, root, offset=0, limit=100):
+        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 200:
+            raise Problem('Choose a valid history page.')
+        raw = self.git(root, 'log', f'--skip={offset}', f'-{limit}', '-z', '--format=%H%x00%s%x00%cI').decode('utf-8', errors='replace').rstrip('\0')
         records = raw.split('\0') if raw else []
-        if not records or len(records) % 3:
+        if not records: return []
+        if len(records) % 3:
             raise Problem('Project history is unavailable or malformed')
         return [dict(zip(('id', 'message', 'date'), records[i:i + 3])) for i in range(0, len(records), 3)]
 
@@ -225,7 +252,17 @@ class Engine:
                 else:
                     raise Problem('expectedContent must be text or null for a new file')
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding='utf-8')
+            fd, temporary = tempfile.mkstemp(prefix='.unforge-write-', dir=target.parent)
+            try:
+                if target.exists(): os.fchmod(fd, target.stat().st_mode & 0o777)
+                with os.fdopen(fd, 'w', encoding='utf-8') as output:
+                    output.write(content); output.flush(); os.fsync(output.fileno())
+                os.replace(temporary, target)
+                directory = os.open(target.parent, os.O_RDONLY)
+                try: os.fsync(directory)
+                finally: os.close(directory)
+            finally:
+                if os.path.exists(temporary): os.unlink(temporary)
             return self.detail(pid)
 
     def save(self, pid, message):
@@ -313,8 +350,10 @@ class Engine:
     def restore(self, pid, revision):
         with self.lock:
             root = self.root(pid)
-            if not isinstance(revision, str) or not re.fullmatch(r'[a-f0-9]{40,64}', revision) or revision not in [h['id'] for h in self.history(root)]:
+            if not isinstance(revision, str) or not re.fullmatch(r'[a-f0-9]{40,64}', revision):
                 raise Problem('Choose a version from this project history')
+            # Any ancestor is eligible, including versions beyond the first UI page.
+            self.git(root, 'merge-base', '--is-ancestor', revision, 'HEAD')
             if self.git(root, 'status', '--porcelain'):
                 raise Problem('Save your current changes before restoring a version')
             self.validate_restore(root, revision)
@@ -377,11 +416,20 @@ class Server(ThreadingHTTPServer):
             self.recovery = Recovery(engine)
             self.care = Care(engine)
             self.agent_jobs = AgentJobs(engine, operations=self.operations)
+            from backups import Backups
+            from projects import Projects
+            from runtime import RuntimeService
+            self.backups = Backups(engine)
+            self.project_service = Projects(engine)
+            self.runtime = RuntimeService(engine)
+            from drafts import Drafts
+            self.drafts = Drafts(engine)
+            from backup_scheduler import BackupScheduler
+            from workspace_watch import WorkspaceWatch
+            self.backup_scheduler = BackupScheduler(engine, self.backups)
+            self.workspace_watch = WorkspaceWatch(engine.home, self.backup_scheduler.changed)
         except Exception:
-            if hasattr(self, 'operations'):
-                self.operations.close()
-            super().server_close()
-            self._release_home_lock()
+            self.server_close()
             raise
 
     def _release_home_lock(self):
@@ -392,6 +440,14 @@ class Server(ThreadingHTTPServer):
 
     def server_close(self):
         try:
+            if hasattr(self, 'workspace_watch'):
+                self.workspace_watch.close()
+            if hasattr(self, 'backup_scheduler'):
+                self.backup_scheduler.close()
+            if hasattr(self, 'runtime'):
+                self.runtime.close()
+            if hasattr(self, 'backups'):
+                self.backups.close()
             if hasattr(self, 'agent_jobs'):
                 self.agent_jobs.close()
             if hasattr(self, 'operations'):
@@ -405,6 +461,14 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def send(self, status, data, mime='application/json', disposition=None):
+        if 200 <= status < 300 and self.command == 'POST' and hasattr(self.server,'backup_scheduler'):
+            path = urlsplit(self.path).path
+            if not path.startswith('/api/backups') and path not in ('/api/folders/inventory',):
+                try:
+                    self.server.backup_scheduler.changed()
+                except (OSError, ValueError) as error:
+                    if isinstance(data,dict):
+                        data = {**data,'backupWarning':'Your change completed, but automatic backup tracking needs attention: '+str(error)}
         if mime == 'application/json':
             data = json.dumps(data).encode()
         self.send_response(status)
@@ -427,7 +491,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path = unquote(urlsplit(self.path).path)
             if path == '/api/health':
-                return self.send(200, dict(ok=True, version='0.2.0'))
+                return self.send(200, dict(ok=True, version='0.3.0'))
+            if path == '/api/desktop':
+                return self.send(200, dict(app='unforge', protocol=1, version='0.3.0',
+                    workspace=str(self.server.engine.home), pid=os.getpid(),
+                    desktopId=getattr(self.server, 'desktop_id', ''),
+                    managed=getattr(self.server, 'desktop_managed', False),
+                    pendingWork=self.server.agent_jobs.desktop_work()))
             if path == '/api/session':
                 return self.send(200, dict(token=self.server.token))
             if path == '/api/agent/status':
@@ -442,7 +512,26 @@ class Handler(BaseHTTPRequestHandler):
             if job_match:
                 return self.send(200, self.server.agent_jobs.get(job_match[1]))
             if path == '/api/projects':
-                return self.send(200, dict(projects=self.server.engine.projects()))
+                return self.send(200, self.server.engine.project_inventory())
+            if path == '/api/backups':
+                return self.send(200, {**self.server.backups.state(),'schedule':self.server.backup_scheduler.state(),'watcher':self.server.workspace_watch.state()})
+            if path == '/api/runtime':
+                return self.send(200, self.server.runtime.overview())
+            project_tool = re.fullmatch(r'/api/projects/([a-f0-9]{32})/(files|content|adoption|runtime|drafts|draft|history)', path)
+            if project_tool:
+                pid, action = project_tool.groups()
+                query = parse_qs(urlsplit(self.path).query)
+                if action == 'files': result = self.server.project_service.files(pid, int(query.get('cursor',['0'])[0]), int(query.get('limit',['100'])[0]))
+                elif action == 'content': result = self.server.project_service.read_file(pid, query.get('path',[''])[0])
+                elif action == 'adoption': result = self.server.project_service.adoption(pid)
+                elif action == 'drafts': result = self.server.drafts.list(pid)
+                elif action == 'draft': result = self.server.drafts.get(pid, query.get('path',[''])[0])
+                elif action == 'history':
+                    cursor = int(query.get('cursor',['0'])[0]); limit = int(query.get('limit',['100'])[0])
+                    versions = self.server.engine.history(self.server.engine.root(pid),cursor,limit)
+                    result = {'history':versions,'nextCursor':cursor+len(versions) if len(versions)==limit else None}
+                else: result = self.server.runtime.get(pid)
+                return self.send(200,result)
             recovery_match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/recovery/([a-f0-9]{32})/download', path)
             if recovery_match:
                 name, data = self.server.recovery.download(*recovery_match.groups())
@@ -522,6 +611,37 @@ class Handler(BaseHTTPRequestHandler):
                 raise Problem('JSON object required')
             path = urlsplit(self.path).path
             engine = self.server.engine
+            draft_match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/draft(/discard)?',path)
+            if draft_match:
+                pid, discard = draft_match.groups()
+                if discard: result = self.server.drafts.discard(pid,payload.get('path'),payload.get('revision'))
+                else: result = self.server.drafts.save(pid,payload.get('path'),payload.get('content'),payload.get('baseContent'),payload.get('revision'))
+                return self.send(200,result)
+            if path == '/api/backups/settings':
+                return self.send(200,self.server.backups.configure(payload.get('destinations'),payload.get('password')))
+            if path == '/api/backups/automatic':
+                return self.send(200,self.server.backup_scheduler.configure(payload.get('enabled'),payload.get('intervalSeconds',300)))
+            if path == '/api/backups/cloud-status':
+                return self.send(200,self.server.backups.refresh_cloud(payload.get('jobId')))
+            if path == '/api/backups/cloud-rehearse':
+                return self.send(200,self.server.backups.cloud_rehearse(payload.get('jobId'),payload.get('path'),payload.get('password'),payload.get('destination')))
+            if path == '/api/backups/start':
+                return self.send(202,self.server.backups.start())
+            if path == '/api/backups/restore':
+                return self.send(200,self.server.backups.restore(payload.get('path'),payload.get('password'),payload.get('destination')))
+            if path == '/api/folders/inventory':
+                return self.send(200,self.server.project_service.inventory(payload.get('path')))
+            if path == '/api/folders/import':
+                return self.send(201,self.server.project_service.import_folder(payload.get('path'),payload.get('name'),payload.get('revision'),payload.get('allowPartial',False)))
+            runtime_match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/runtime/(configure|start|check|stop|remove)',path)
+            if runtime_match:
+                pid, action = runtime_match.groups()
+                if action == 'configure': result = self.server.runtime.configure(pid,payload.get('document'),payload.get('revision'))
+                elif action == 'stop': result = self.server.runtime.stop(pid,payload.get('runId'))
+                elif action == 'remove': result = self.server.runtime.remove(pid,payload.get('runId'))
+                elif action == 'start': result = self.server.runtime.start(pid,trusted=payload.get('trusted',False),persistent=payload.get('persistent',False))
+                else: result = getattr(self.server.runtime,action)(pid,trusted=payload.get('trusted',False))
+                return self.send(200,result)
             if path == '/api/agent/jobs':
                 return self.send(201, self.server.agent_jobs.start(payload.get('projectId'), payload.get('request'), payload.get('operationId')))
             if path == '/api/operations/settings':

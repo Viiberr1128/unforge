@@ -19,7 +19,7 @@ class Client:
         if body is not None:
             token = self.call('/session')['token']
             headers = {'Content-Type': 'application/json', 'Origin': f'http://127.0.0.1:{self.port}', 'X-Unforge-Token': token}
-        connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=40)
+        connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=3600)
         try:
             connection.request('GET' if body is None else 'POST', '/api' + path,
                                None if body is None else json.dumps(body, allow_nan=False).encode('utf-8'), headers)
@@ -69,6 +69,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int, default=4319)
     commands = parser.add_subparsers(dest='command', required=True)
+    raw = commands.add_parser('api', help='Call any local API endpoint; use a private JSON file for sensitive request fields')
+    raw.add_argument('path', help='API path such as /backups or /projects/ID/runtime')
+    raw.add_argument('--from-file', type=Path, help='POST a JSON object; omit for GET')
     commands.add_parser('projects', help='List owned projects')
     commands.add_parser('agent-status', help='Check installed optional Codex support; does not invoke it')
     agent_start = commands.add_parser('agent-start', help='Start Codex in an isolated project copy using your configured account')
@@ -126,7 +129,11 @@ def main():
     operation_id = None
     try:
         command = args.command
-        if command == 'projects': result = client.call('/projects')
+        if command == 'api':
+            if not args.path.startswith('/') or args.path.startswith('//'):
+                raise ValueError('Use a local API path starting with one slash.')
+            result = client.call(args.path, read_json(args.from_file, dict) if args.from_file else None)
+        elif command == 'projects': result = client.call('/projects')
         elif command == 'agent-status': result = client.call('/agent/status')
         elif command == 'agent-start':
             request = args.from_file.read_text(encoding='utf-8')
@@ -171,8 +178,12 @@ def main():
             elif command == 'restore': result = client.call(prefix + '/restore', {'revision': args.revision})
             elif command == 'request': result = client.call(prefix + '/request', {'message': args.from_file.read_text(encoding='utf-8')})
             elif command == 'write':
-                detail = client.call(prefix)
-                original = next((f['content'] for f in detail['files'] if f['path'] == args.path), None)
+                from urllib.parse import quote
+                try:
+                    original = client.call(prefix + '/content?path=' + quote(args.path, safe=''))['content']
+                except ValueError as error:
+                    if str(error) != 'This file is not part of the visible project source': raise
+                    original = None
                 result = client.call(prefix + '/file', {'path': args.path, 'content': args.from_file.read_text(encoding='utf-8'), 'expectedContent': original})
             else:
                 detail = client.call(prefix)

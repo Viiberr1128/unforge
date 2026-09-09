@@ -34,7 +34,7 @@ export default function Projects({ projects, openProject, openOwnership, create,
         <span className="saved-at">{relativeDate(project.updatedAt || project.updated_at || project.lastSaved)}</span><Icon name="arrow"/>
       </button>) : <div className="empty"><h2>Something useful starts here.</h2><p>Create your first project. Everything stays on this computer.</p><button className="text-button" onClick={create}>Start your first project<Icon name="arrow"/></button></div>}
     </section>
-    <div className="import-line"><span>Already have a project?</span><button className="text-button" onClick={importProject}>Open a project bundle<Icon name="arrow" size={16}/></button></div>
+    <div className="import-line"><span>Already have a project?</span><button className="text-button" onClick={importProject}>Bring an existing app<Icon name="arrow" size={16}/></button></div>
     <section className="ownership-banner"><div><h2>Yours, all the way down.</h2><p>Projects are ordinary folders with Git history. Keep working without an account or a cloud service.</p></div><button className="text-button" onClick={openOwnership}>Explore ownership<Icon name="arrow"/></button></section>
     <footer>Local workspace · Optional Codex assistance</footer>
   </>;

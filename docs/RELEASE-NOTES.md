@@ -1,3 +1,21 @@
+# Unforge 0.3.0 — durable local work and encrypted recovery
+
+This is a working alpha for local ownership and private qualification. It is not a production migration or a claim that all GitHub services have been replaced.
+
+- Review and import an independent local folder copy with supported Git history.
+- Encrypted incremental vaults reuse unchanged contents; exact-point restores and iCloud download rehearsals verify recovery while preserving existing work. Older standalone backups remain supported.
+- Browse full paginated files/history and recover saved editor drafts and agent proposals after restart.
+- Use trusted apps with managed persistent data or disposable previews; execute configured checks locally.
+- Protect persistent data against a second writer after supervisor failure.
+- Make encrypted whole-workspace recovery points using bundled Restic; verify a complete local restore before copying to existing storage.
+- Schedule backups while Unforge is open, observe external edits in the native Mac build and inspect macOS iCloud upload metadata.
+- Keep backup failures and upload uncertainty visible throughout the workspace. Vault rollover preserves earlier history while bounding individual recovery inventories.
+- Restore into a separate folder and open that workspace through the Mac File menu.
+
+The Mac package includes Python, the web interface, Restic and native helpers. It still requires installed Git and is ad-hoc signed, not Developer ID notarized. Public runtime/deployment adapters, team collaboration, second-device recovery, complete external cloud-data recovery and cross-platform qualification remain outstanding. See README for limitations and key recovery requirements.
+
+---
+
 # Unforge 0.2.0 — project care and recovery
 
 Built for humans. Operated by AI. Owned by you.

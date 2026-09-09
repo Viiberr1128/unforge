@@ -8,10 +8,13 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_FILES = ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CONTRIBUTING.md', 'SECURITY.md', 'AGENTS.md',
               'package.json', 'package-lock.json', 'vite.config.js', 'index.html', '.gitignore',
-              'engine.py', 'launcher.py', 'unforge.py', 'agent_jobs.py', 'test_agent_jobs.py', 'insights.py', 'test_insights.py', 'test_engine.py', 'test_client.py',
+              'engine.py', 'launcher.py', 'test_launcher.py', 'unforge.py', 'agent_jobs.py', 'test_agent_jobs.py', 'insights.py', 'test_insights.py', 'test_engine.py', 'test_client.py',
               'operations.py', 'care.py', 'recovery.py', 'test_operations.py', 'test_care.py', 'test_recovery.py',
+              'projects.py', 'drafts.py', 'runtime.py', 'backups.py', 'backup_scheduler.py', 'workspace_watch.py', 'test_workspace_watch.py',
+              'incremental_backups.py', 'test_incremental_backups.py', 'test_cloud_rehearsal.py',
+              'test_projects.py', 'test_drafts.py', 'test_runtime.py', 'test_backups.py', 'test_storage_guard.py', 'test_workspace_durability.py', 'test_backup_metadata.py', 'test_backup_scheduler.py', 'test_agent_durability.py', 'test_ownership_integration.py', 'test_cloud_status.py',
               'start.sh', 'start.command', 'check.sh']
-DIRECTORIES = ['src', 'public', 'docs', 'tests', 'scripts', 'dist', '.github']
+DIRECTORIES = ['src', 'public', 'docs', 'tests', 'scripts', 'dist', '.github', 'macos']
 
 
 def main():

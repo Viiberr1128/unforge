@@ -164,3 +164,34 @@ Execution uses `codex --ask-for-approval never exec --sandbox workspace-write --
 Operational bounds are one active job per OS user, a 15-minute timeout, 128 KiB retained output, 128 KiB per changed UTF-8 text file, and a 512 KiB patch. At most 32 jobs are retained per app session. These limits do not enforce a dollar spending cap. Optional execution can communicate with the configured provider.
 
 Unaccepted proposals and logs are session-only and disappear on restart. Applied metadata persists under `.unforge/proposals/` and omits raw logs. A successful CLI exit is not evidence that tests passed or that a deployment occurred. Automated tests use a fake executable for controlled failure and cancellation coverage. One live Codex smoke test completed a specified README edit in a disposable project: the original stayed unchanged until explicit apply, and a saved bundle cloned with the edit and proposal metadata. This is limited integration evidence, not a general AI-quality or deployment guarantee.
+
+## Workspace ownership API
+
+The CLI supports all endpoints through `python3 unforge.py api /path`. Add `--from-file /private/request.json` to POST a JSON object (use a private file for recovery passphrases). This client always talks to loopback and obtains the existing session token; no GitHub account is used.
+
+- GET `/backups`: destinations, jobs, upload evidence, automatic schedule and watcher state.
+- POST `/backups/settings`: `destinations` (kind, path, name) and initial `password`.
+- POST `/backups/start`: `{}` starts an encrypted recovery point; poll GET status while active.
+- POST `/backups/automatic`: `enabled` and `intervalSeconds` (at least 60; default 300).
+- POST `/backups/cloud-status`: `jobId`; macOS upload metadata, not independent remote readback.
+- POST `/backups/restore`: `path`, `password`, `destination` (new folder only).
+- POST `/folders/inventory`: `path`; review omissions before import.
+- POST `/folders/import`: `path`, `name`, inventory `revision`, and explicit `allowPartial`.
+- GET `/projects/ID/files?cursor=0&limit=100` and `/content?path=...`: full paginated navigation.
+- GET `/projects/ID/history?cursor=0&limit=100`: older saved versions.
+- GET `/projects/ID/drafts`; POST `/draft` with path, content, baseContent and expected revision.
+- GET `/projects/ID/runtime`: configuration/revision, suggestions, available tools and attempts.
+- POST `/projects/ID/runtime/configure`: `document` and exact `revision`.
+- POST `/projects/ID/runtime/start`: `trusted:true`, optional `persistent:true`.
+- POST `/projects/ID/runtime/check`: `trusted:true`; checks always use disposable data.
+- POST `/projects/ID/runtime/stop` or `/remove`: `runId`; removing a stopped attempt retains persistent app data.
+
+Runtime configuration is executable authority: only configure trusted commands. It is not an OS security sandbox. Persistent applications can use UNFORGE_DATA_DIR, `dataPaths` for absent source-relative data folders, or `dataEnvironment` for variable-to-data-path bindings. All source runs use a saved Git version; save configuration and code first.
+
+### Incremental recovery and iCloud rehearsal
+
+`POST /backups/start` now writes incremental recovery points. A returned `backupPath` ends in `.ufpoint`; retain its entire `vaultPath` (`.ufvault`). `addedBytes` and `reusedBytes` describe destination publication, not provider billing or cloud upload. `POST /backups/restore` accepts both these points and older standalone `.ufbackup` paths.
+
+`POST /backups/cloud-rehearse` accepts `{jobId, path, password, destination}` for a completed registered iCloud point. It preflights the key, evicts only the uploaded encrypted local cache, downloads the whole vault, then verifies an exact restore into a new folder. It can take several minutes. `cloudRecoveryEvidence.contentVerified` records successful content recovery; `secondDeviceVerified` remains false. Supply passphrases through a protected request file, never shell arguments, logs, or source files.
+
+Vault rotation is automatic at 500 snapshots or 4,000 private repository entries. `vaultRollover.newSeedRequired` indicates a fresh seed; old vaults remain recoverable. Destinations report `vaultEntries` and `vaultEntryLimit` (8,000). Rollover limits inventory growth within each vault, not total retained storage. `POST /backups/automatic` accepts `intervalSeconds`; the UI exposes common intervals.

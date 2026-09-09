@@ -1,6 +1,26 @@
 # Third-party notices
 
-The built interface includes the following MIT-licensed libraries. Development dependencies have their own licenses in their npm packages. No third-party code is vendored in the engine.
+The built interface includes the following MIT-licensed libraries. Development dependencies have their own licenses in their npm packages. The source engine uses Python's standard library. The Mac app additionally bundles Python, the PyInstaller bootloader, and Restic; their notices are included under `Contents/Resources/Licenses`.
+
+## Mac runtime and helpers
+
+The Python runtime includes the Python Software Foundation license and the full
+CPython third-party notices for its extension libraries. PyInstaller's bootloader
+license includes its distribution exception. Both are copied from the build
+runtime, rather than substituting Unforge's MIT license.
+
+The bundled [Restic 0.19.1](https://github.com/restic/restic/tree/v0.19.1) executable
+provides encrypted backups in the standard Restic repository format. Restic is
+licensed under the [BSD 2-Clause license](https://github.com/restic/restic/blob/v0.19.1/LICENSE).
+The build verifies the pinned release archive checksum and copies the matching,
+checksum-verified license into `Restic-LICENSE.txt`. Restic remains a separate
+executable; its license and upstream dependency licenses are not replaced by
+Unforge's license.
+
+The native Unforge shell, iCloud metadata helper, workspace-change helper, and
+icon generator are Unforge source under the repository's MIT license. They link
+to Apple's system frameworks. Git and optional project runtimes are supplied
+by the user and are not redistributed inside the app.
 
 ## react 19.2.8
 

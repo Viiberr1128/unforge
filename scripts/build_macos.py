@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Build the local macOS app without global pip installs or user project data."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import plistlib
+import shutil
+import subprocess
+import sys
+import tempfile
+import venv
+
+ROOT = Path(__file__).resolve().parents[1]
+ARTIFACTS = ROOT / 'artifacts' / 'macos'
+BUILD_ENV = ROOT / '.venv-macos'
+RESTIC_LICENSE_HASHES = {'0.19.1': '6f08a01a9fab5b24e139a09f15cc24a73087c7bc09e3bacf099fdf2d767bf897'}
+
+
+def run(*args, **kwargs):
+    print('+ ' + ' '.join(str(arg) for arg in args), flush=True)
+    return subprocess.run([str(arg) for arg in args], cwd=ROOT, check=True, **kwargs)
+
+
+def license_download(url, maximum=512 * 1024):
+    # Use macOS's configured certificate trust, without weakening TLS checks.
+    result = run('curl', '--proto', '=https', '--fail', '--silent', '--show-error',
+                 '--location', '--max-time', '30', '--max-filesize', str(maximum),
+                 url, capture_output=True)
+    if len(result.stdout) > maximum:
+        raise RuntimeError('A runtime license download exceeded its size limit.')
+    return result.stdout
+
+
+def copy_restic_license(destination, version):
+    expected = RESTIC_LICENSE_HASHES.get(version)
+    if expected is None:
+        raise RuntimeError('Pin and review the license for the selected Restic version before packaging.')
+    content = license_download(f'https://raw.githubusercontent.com/restic/restic/v{version}/LICENSE', 64 * 1024)
+    if hashlib.sha256(content).hexdigest() != expected:
+        raise RuntimeError('The Restic license does not match the reviewed release.')
+    (destination / 'Restic-LICENSE.txt').write_bytes(content)
+
+
+def copy_licenses(python, destination):
+    """Keep license terms from the exact Python and bootloader used to build."""
+    destination.mkdir()
+    paths = json.loads(run(python, '-c',
+        'import sys,sysconfig,json,importlib.metadata as m; '
+        'from pathlib import Path; '
+        'd=m.distribution("pyinstaller"); '
+        'print(json.dumps({"python":str(Path(sysconfig.get_path("stdlib"))/"LICENSE.txt"),'
+        '"version":".".join(str(v) for v in sys.version_info[:3]),'
+        '"notices":str(Path(sys.base_prefix)/"Resources/English.lproj/Documentation/_sources/license.rst.txt"),'
+        '"bootloader":[str(d.locate_file(f)) for f in d.files '
+        'if "license" in str(f).lower() and str(f).endswith((".txt", "LICENSE"))]}))',
+        capture_output=True, text=True).stdout)
+    python_license = Path(paths['python'])
+    if not python_license.is_file() or not paths['bootloader']:
+        raise RuntimeError('The build runtime is missing its license files.')
+    shutil.copy2(python_license, destination / 'Python-LICENSE.txt')
+    # CPython's top-level LICENSE omits notices for bundled extension libraries.
+    # The full documentation includes OpenSSL, libffi, zlib and other terms.
+    notices = Path(paths['notices'])
+    if notices.is_file():
+        shutil.copy2(notices, destination / 'Python-THIRD-PARTY-NOTICES.rst')
+    else:
+        url = f'https://raw.githubusercontent.com/python/cpython/v{paths["version"]}/Doc/license.rst'
+        content = license_download(url)
+        if len(content) > 512 * 1024 or b'OpenSSL' not in content:
+            raise RuntimeError('Could not obtain the full Python runtime license notices.')
+        (destination / 'Python-THIRD-PARTY-NOTICES.rst').write_bytes(content)
+    for index, source in enumerate(paths['bootloader']):
+        shutil.copy2(source, destination / f'PyInstaller-{index}-LICENSE.txt')
+    shutil.copy2(ROOT / 'LICENSE', destination / 'Unforge-LICENSE.txt')
+    shutil.copy2(ROOT / 'THIRD_PARTY_NOTICES.md', destination / 'Web-THIRD-PARTY-NOTICES.md')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--skip-web-build', action='store_true',
+                        help='Use the existing dist; run npm run check before using this option.')
+    args = parser.parse_args()
+    if sys.platform != 'darwin':
+        parser.error('Build the macOS app on a Mac.')
+    architecture = platform.machine()
+    if architecture not in ('arm64', 'x86_64'):
+        parser.error(f'Unsupported build architecture: {architecture}')
+    for program in ('xcrun', 'codesign', 'ditto', 'git', 'curl'):
+        if not shutil.which(program):
+            parser.error(f'{program} is required on the build machine.')
+    if not (ROOT / 'macos/Unforge.swift').is_file():
+        parser.error('macos/Unforge.swift is missing.')
+    version = json.loads((ROOT / 'package.json').read_text())['version']
+    if not args.skip_web_build:
+        if not (ROOT / 'node_modules').is_dir():
+            run('npm', 'ci')
+        run('npm', 'run', 'build')
+    if not (ROOT / 'dist/index.html').is_file():
+        parser.error('The frontend is missing; run npm run build.')
+    if not BUILD_ENV.exists():
+        venv.EnvBuilder(with_pip=True).create(BUILD_ENV)
+    python = BUILD_ENV / 'bin/python'
+    run(python, '-m', 'pip', 'install', '--disable-pip-version-check',
+        '-r', ROOT / 'macos/requirements-build.txt')
+    ARTIFACTS.mkdir(parents=True, exist_ok=True)
+    from fetch_restic import fetch, VERSION as RESTIC_VERSION
+    restic = fetch(ROOT)
+    # A temporary staging directory means a failed build cannot damage the last app.
+    with tempfile.TemporaryDirectory(prefix='.build-', dir=ARTIFACTS) as staging_name:
+        staging = Path(staging_name)
+        app = staging / 'Unforge.app'
+        contents = app / 'Contents'
+        binaries = contents / 'MacOS'
+        resources = contents / 'Resources'
+        binaries.mkdir(parents=True)
+        resources.mkdir()
+        env = {**os.environ, 'MACOSX_DEPLOYMENT_TARGET': '13.0'}
+        run(python, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir',
+            '--name', 'unforge-engine', '--target-architecture', architecture,
+            '--distpath', staging / 'frozen', '--workpath', staging / 'freeze-work',
+            '--specpath', staging, '--paths', ROOT,
+            '--add-data', f'{ROOT / "dist"}:dist',
+            '--hidden-import', 'agent_jobs', '--hidden-import', 'operations',
+            '--hidden-import', 'care', '--hidden-import', 'recovery',
+            '--hidden-import', 'projects', '--hidden-import', 'drafts', '--hidden-import', 'runtime',
+            '--hidden-import', 'backups', '--hidden-import', 'backup_scheduler',
+            '--hidden-import', 'incremental_backups',
+            '--hidden-import', 'workspace_watch',
+            '--hidden-import', 'insights', ROOT / 'launcher.py', env=env)
+        shutil.copytree(staging / 'frozen/unforge-engine', resources / 'engine', symlinks=True)
+        shutil.copy2(restic, resources / 'engine/restic')
+        run('xcrun', 'swiftc', '-O', '-target', f'{architecture}-apple-macosx13.0',
+            ROOT / 'macos/CloudStatus.swift', '-o', resources / 'engine/unforge-cloud-status', env=env)
+        run('xcrun', 'swiftc', '-O', '-target', f'{architecture}-apple-macosx13.0',
+            ROOT / 'macos/CloudRehydrate.swift', '-o', resources / 'engine/unforge-cloud-rehydrate', env=env)
+        run('xcrun', 'swiftc', '-O', '-target', f'{architecture}-apple-macosx13.0',
+            ROOT / 'macos/WorkspaceWatch.swift', '-o', resources / 'engine/unforge-workspace-watch', env=env)
+        run('xcrun', 'swiftc', '-O', '-target', f'{architecture}-apple-macosx13.0',
+            '-framework', 'AppKit', '-framework', 'WebKit',
+            ROOT / 'macos/Unforge.swift', '-o', binaries / 'Unforge', env=env)
+        if (ROOT / 'macos/Icon.swift').is_file():
+            run('xcrun', 'swiftc', '-O', ROOT / 'macos/Icon.swift', '-o', staging / 'draw-icon')
+            run(staging / 'draw-icon', staging / 'Unforge.iconset')
+            run('xcrun', 'iconutil', '-c', 'icns', staging / 'Unforge.iconset',
+                '-o', resources / 'Unforge.icns')
+        info = {
+            'CFBundleName': 'Unforge', 'CFBundleDisplayName': 'Unforge',
+            'CFBundleIdentifier': 'org.unforge.desktop', 'CFBundleExecutable': 'Unforge',
+            'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': version,
+            'CFBundleVersion': '1', 'LSMinimumSystemVersion': '13.0',
+            'LSMultipleInstancesProhibited': True,
+            'LSApplicationCategoryType': 'public.app-category.developer-tools',
+            'NSHighResolutionCapable': True,
+            'NSHumanReadableCopyright': 'Unforge contributors. MIT license.',
+            'NSAppTransportSecurity': {'NSAllowsLocalNetworking': True},
+        }
+        if (resources / 'Unforge.icns').is_file():
+            info['CFBundleIconFile'] = 'Unforge'
+        (contents / 'Info.plist').write_bytes(plistlib.dumps(info))
+        copy_licenses(python, resources / 'Licenses')
+        copy_restic_license(resources / 'Licenses', RESTIC_VERSION)
+        shutil.copy2(ROOT / 'docs/MAC_APP.md', resources / 'MAC_APP.md')
+        git_revision = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT,
+                                      capture_output=True, text=True)
+        source_revision = git_revision.stdout.strip() if git_revision.returncode == 0 else None
+        git_status = subprocess.run(['git', 'status', '--porcelain'], cwd=ROOT,
+                                    capture_output=True, text=True)
+        source_files = [p for p in ROOT.glob('*.py') if p.is_file()]
+        source_files.extend(ROOT / name for name in ('package.json', 'package-lock.json', 'vite.config.js', 'index.html'))
+        for folder in ('src', 'macos', 'scripts', 'dist'):
+            source_files.extend(p for p in (ROOT/folder).rglob('*') if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc')
+        source_manifest = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(source_files)}
+        source_manifest_bytes = json.dumps(source_manifest, sort_keys=True).encode()
+        (resources / 'SOURCE-MANIFEST.json').write_bytes(source_manifest_bytes)
+        receipt = {'sourceDigest': hashlib.sha256(source_manifest_bytes).hexdigest(), 'version': version, 'architecture': architecture,
+                   'minimumMacOS': '13.0', 'sourceRevision': source_revision,
+                   'sourceDirty': bool(git_status.stdout) if git_status.returncode == 0 else None,
+                   'python': run(python, '--version', capture_output=True, text=True).stdout.strip(),
+                   'restic': RESTIC_VERSION,
+                   'signing': 'ad-hoc', 'notarized': False}
+        (resources / 'BUILD.json').write_text(json.dumps(receipt, indent=2) + '\n')
+        run('codesign', '--force', '--deep', '--sign', '-', app)
+        run('codesign', '--verify', '--deep', '--strict', '--verbose=2', app)
+        output = ARTIFACTS / 'Unforge.app'
+        if output.exists():
+            if output.is_symlink():
+                raise RuntimeError('Refusing to replace a symlink at the app output path.')
+            shutil.rmtree(output)
+        shutil.move(app, output)
+    archive = ARTIFACTS / f'Unforge-{version}-macos-{architecture}.zip'
+    temporary_archive = archive.with_suffix('.zip.tmp')
+    run('ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', output, temporary_archive)
+    temporary_archive.replace(archive)
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    (ARTIFACTS / 'SHA256SUMS').write_text(f'{digest}  {archive.name}\n')
+    print(f'\nApp: {output}\nArchive: {archive}\nSHA256: {digest}')
+    print('Ad-hoc signed for local use. Developer ID signing and notarization are not included.')
+
+
+if __name__ == '__main__':
+    main()

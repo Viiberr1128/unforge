@@ -19,4 +19,4 @@ body:
     id: environment
     attributes:
       label: Your computer and Unforge version
-      placeholder: macOS or Linux, Unforge 0.1.0
+      placeholder: macOS or Linux, Unforge 0.3.0

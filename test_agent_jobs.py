@@ -381,7 +381,7 @@ class AgentAllowanceTests(unittest.TestCase):
             self.jobs.start(self.pid, 'change', 'config')
         self.assertEqual(self.ledger.overview()['usedToday'], 0)
 
-    def test_restart_returns_archived_receipt_even_without_cli_or_with_dirty_project(self):
+    def test_restart_returns_saved_proposal_even_without_cli_or_with_dirty_project(self):
         first = self.finish(self.jobs.start(self.pid, 'change', 'request-1'))
         self.jobs.close()
         self.ledger.close()
@@ -390,9 +390,11 @@ class AgentAllowanceTests(unittest.TestCase):
         self.engine.edit(self.pid, 'README.md', 'New unsaved work')
         replay = self.jobs.start(self.pid, 'change', 'request-1')
         self.assertEqual(replay['id'], first['id'])
-        self.assertEqual(replay['status'], 'archived')
+        self.assertEqual(replay['status'], 'completed')
         self.assertEqual(replay['operationState'], 'succeeded')
-        self.assertFalse(replay['proposalAvailable'])
+        self.assertTrue(replay['proposalAvailable'])
+        self.assertEqual(replay['diff'], first['diff'])
+        self.assertEqual(replay['output'], first['output'])
         self.assertEqual(replay['recordedResult']['changedFileCount'], 3)
         self.assertEqual(self.jobs.get(first['id']), replay)
         self.assertEqual(self.jobs.status()['recentJobs'][0]['id'], first['id'])

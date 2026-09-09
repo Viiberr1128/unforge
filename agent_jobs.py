@@ -5,6 +5,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import selectors
 import shutil
@@ -21,6 +22,9 @@ from operations import OperationError
 
 MAX_LOG = 128 * 1024
 MAX_PATCH = 512 * 1024
+MAX_SAVED_JOBS = 200
+MAX_SAVED_BYTES = 128 * 1024 * 1024
+MAX_RECORD_BYTES = 5 * 1024 * 1024
 VERIFICATION_CACHES = {'__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache', 'node_modules'}
 PROOF_NOTE = 'CLI exit 0 is not test or deployment proof. Review the proposed changes before saving a version.'
 
@@ -40,7 +44,7 @@ def agent_environment():
 
 
 class AgentJobs:
-    """One active agent across local Unforge processes; proposals stay in memory.
+    """One active agent across local processes; bounded artifacts survive restart.
 
     `executable` and `timeout_seconds` are constructor controls for trusted callers
     and tests, never request parameters. Existing Codex account auth is used;
@@ -54,6 +58,205 @@ class AgentJobs:
         self._jobs = {}
         self._lock = threading.RLock()
         self._closed = False
+        self._session = uuid.uuid4().hex
+        self._store = self.engine.home / '.agent-jobs'
+        self._store.mkdir(mode=0o700, exist_ok=True)
+        info = self._store.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            raise Problem('Agent history must be a directory owned by this account.')
+        self._owner_path = self._store / ('.owner-' + self._session)
+        self._owner = self._open_owner(self._owner_path)
+        fcntl.flock(self._owner.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        self._history_errors = []
+        try:
+            self._load_saved()
+            self._clean_stale_writes()
+        except BaseException:
+            self._owner.close()
+            self._owner_path.unlink(missing_ok=True)
+            raise
+
+    @staticmethod
+    def _open_owner(path):
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            os.close(fd)
+            raise Problem('Invalid agent history owner lease.')
+        return os.fdopen(fd, 'a')
+
+    def _owner_alive(self, session):
+        if not isinstance(session, str) or not re.fullmatch(r'[a-f0-9]{32}', session):
+            return False
+        if session == self._session:
+            return True
+        with self._open_owner(self._store / ('.owner-' + session)) as lease:
+            try:
+                fcntl.flock(lease.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+        (self._store / ('.owner-' + session)).unlink(missing_ok=True)
+        return False
+
+    def _record_path(self, jobid):
+        if not isinstance(jobid, str) or not re.fullmatch(r'[a-f0-9]{32}', jobid):
+            raise Problem('Invalid saved agent job ID.')
+        return self._store / (jobid + '.json')
+
+    def _clean_stale_writes(self):
+        # Only remove our unpublished temporary writes after their OS lease is
+        # gone. Another live reader/writer may share the same process in tests.
+        for path in self._store.glob('.write-*'):
+            match = re.fullmatch(r'\.write-([a-f0-9]{32})-.+', path.name)
+            if match and not self._owner_alive(match[1]):
+                info = path.lstat()
+                if stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid():
+                    path.unlink()
+        for path in self._store.glob('.owner-*'):
+            session = path.name.removeprefix('.owner-')
+            if re.fullmatch(r'[a-f0-9]{32}', session):
+                self._owner_alive(session)
+
+    def _persist(self, job):
+        """Durably publish an artifact before exposing its new result state."""
+        record = {key: value for key, value in job.items() if not key.startswith('_')}
+        record.update(durable=True, proposalAvailable=job['status'] == 'completed' and bool(job.get('diff')))
+        payload = json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        raw = json.dumps({'schemaVersion': 1, 'ownerSession': job.get('_ownerSession', self._session),
+                          'sha256': hashlib.sha256(payload).hexdigest(),
+                          'job': record}, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        if len(raw) > MAX_RECORD_BYTES:
+            raise Problem('Agent history record exceeds its storage limit.')
+        target = self._record_path(job['id'])
+        descriptor, name = tempfile.mkstemp(prefix='.write-' + self._session + '-', dir=self._store)
+        temporary = Path(name)
+        try:
+            with os.fdopen(descriptor, 'wb') as output:
+                output.write(raw)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, target)
+            directory = os.open(self._store, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        finally:
+            temporary.unlink(missing_ok=True)
+        job.update(durable=True, proposalAvailable=record['proposalAvailable'])
+
+    def _read_saved(self, path):
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size > MAX_RECORD_BYTES:
+                raise Problem('Invalid saved agent record.')
+            envelope = json.loads(source.read(MAX_RECORD_BYTES + 1))
+        if not isinstance(envelope, dict) or envelope.get('schemaVersion') != 1:
+            raise Problem('Unsupported saved agent record.')
+        job = envelope.get('job')
+        if not isinstance(job, dict) or any(key.startswith('_') for key in job):
+            raise Problem('Invalid saved agent fields.')
+        payload = json.dumps(job, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        if envelope.get('sha256') != hashlib.sha256(payload).hexdigest():
+            raise Problem('Saved agent artifact checksum does not match.')
+        if self._record_path(job.get('id')) != path or not re.fullmatch(r'[a-f0-9]{32}', job.get('projectId', '')):
+            raise Problem('Invalid saved agent identity.')
+        for key in ('request', 'baseVersion', 'createdAt', 'output', 'diff'):
+            if not isinstance(job.get(key), str):
+                raise Problem('Invalid saved agent content.')
+        if (len(job['request']) > 8000 or len(job['diff'].encode()) > MAX_PATCH or
+                len(job['output'].encode()) > 3 * MAX_LOG or
+                not re.fullmatch(r'[a-f0-9]{40,64}', job['baseVersion']) or
+                job.get('status') not in ('running', 'completed', 'failed', 'cancelled', 'timed_out', 'applied', 'applying', 'unknown')):
+            raise Problem('Invalid saved agent bounds or state.')
+        if not isinstance(job.get('changedFiles'), list) or len(job['changedFiles']) > 10000:
+            raise Problem('Invalid saved agent changes.')
+        root = self.engine.root(job['projectId'])
+        for change in job['changedFiles']:
+            if not isinstance(change, dict) or change.get('status') not in ('added', 'modified', 'deleted'):
+                raise Problem('Invalid saved agent change.')
+            self.engine.safe_path(root, change.get('path'))
+        job.update(_ownerSession=envelope.get('ownerSession'), recovered=True, durable=True)
+        if job['status'] in ('running', 'applying'):
+            if self._owner_alive(envelope.get('ownerSession')):
+                job['_external'] = True
+            else:
+                # Reconciliation is evidence recovery, never another CLI invocation.
+                if job['status'] == 'applying' and self._was_applied(job):
+                    job['status'] = 'applied'
+                    job['note'] = 'Recovered the proposal record written with its source changes.'
+                else:
+                    job['status'] = 'unknown'
+                    job['note'] = 'Unforge stopped before confirming this outcome. Saved logs remain available. This attempt will not be repeated automatically.'
+                job['finishedAt'] = job.get('finishedAt') or now()
+                self._persist(job)
+        job['proposalAvailable'] = job['status'] == 'completed' and bool(job['diff'])
+        self._sync_operation(job)
+        return job
+
+    def _sync_operation(self, job, record=None):
+        if self.operations is None or not job.get('operationId'):
+            return
+        record = record or self._ledger('by_reference', job['id'])
+        if record is None:
+            return
+        job.update(operationState=record['state'], recordedResult=record['result'])
+        if (job['status'] == 'unknown' and isinstance(record['result'], dict) and
+                record['result'].get('reconciled') and record['state'] in ('succeeded', 'failed')):
+            # A human receipt is not a substitute for a validated source proposal.
+            job.update(status='failed', proposalAvailable=False,
+                       note='This interrupted attempt was reconciled. Its retained logs remain available; no proposal was executed or applied during reconciliation.')
+            self._persist(job)
+
+    def _was_applied(self, job):
+        try:
+            root = self.engine.root(job['projectId'])
+            target = self.engine.safe_path(root, '.unforge/proposals/' + job['id'] + '.json')
+            if not target.is_file() or target.stat().st_size > 1024 * 1024:
+                return False
+            record = json.loads(target.read_text(encoding='utf-8'))
+            return all(record.get(key) == job[key] for key in ('request', 'baseVersion', 'createdAt', 'finishedAt', 'provider', 'changedFiles', 'exitCode'))
+        except (OSError, ValueError, TypeError):
+            return False
+
+    def _load_saved(self):
+        paths = sorted(self._store.glob('*.json'), key=lambda item: item.name)
+        if len(paths) > MAX_SAVED_JOBS:
+            raise Problem('Agent history exceeds its record limit. Preserve a copy before repairing this folder.')
+        total = 0
+        loaded = []
+        for path in paths:
+            try:
+                total += path.lstat().st_size
+                if total > MAX_SAVED_BYTES:
+                    raise Problem('Agent history exceeds its byte limit.')
+                loaded.append(self._read_saved(path))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                self._history_errors.append({'id': path.stem, 'error': str(exc)[:300]})
+        for job in sorted(loaded, key=lambda item: (item['createdAt'], item['id'])):
+            self._jobs[job['id']] = job
+
+    def _make_room(self):
+        """Never evict an unapplied proposal or an uncertain outcome."""
+        paths = list(self._store.glob('*.json'))
+        total = sum(path.lstat().st_size for path in paths)
+        count = len(paths)
+        for job in list(self._jobs.values()):
+            if count < MAX_SAVED_JOBS and total <= MAX_SAVED_BYTES - MAX_RECORD_BYTES:
+                return
+            self._sync_operation(job)
+            disposable = job['status'] in ('applied', 'failed', 'cancelled', 'timed_out') or (job['status'] == 'completed' and not job.get('diff'))
+            if not disposable or job.get('_external'):
+                continue
+            path = self._record_path(job['id'])
+            if path.exists():
+                total -= path.lstat().st_size
+                path.unlink()
+                count -= 1
+            self._jobs.pop(job['id'], None)
+        if count >= MAX_SAVED_JOBS or total > MAX_SAVED_BYTES - MAX_RECORD_BYTES:
+            raise Problem('Saved agent history is full. Preserve and apply pending proposals or reconcile uncertain outcomes before starting more work. Restarting will not discard them.')
 
     def _command(self):
         return shutil.which(self.executable if self.executable is not None else 'codex')
@@ -72,6 +275,9 @@ class AgentJobs:
                         known.add(saved['id'])
             return dict(available=bool(self._command()), provider='codex', activeJob=active,
                         recentJobs=recent[:32],
+                        durableProposals=True, historyErrors=copy.deepcopy(self._history_errors),
+                        retention={'maxRecords': MAX_SAVED_JOBS, 'maxBytes': MAX_SAVED_BYTES,
+                                   'pendingProposalsRetained': True, 'unknownOutcomesRetained': True},
                         timeoutSeconds=self.timeout_seconds, logLimitBytes=MAX_LOG,
                         authentication='Not checked. Uses your existing Codex account.',
                         localAllowance=bool(self.operations),
@@ -91,7 +297,7 @@ class AgentJobs:
         status = 'unknown' if state == 'unknown' else 'running' if state == 'running' else 'archived'
         note = ('This attempt is still owned by another local session. It will not be repeated.' if state == 'running'
                 else 'The execution owner stopped before recording an outcome. Reconcile this operation before deciding what to do next. It will not be repeated.' if state == 'unknown'
-                else 'This is a saved attempt receipt. Its proposal and logs belonged to a previous session and are no longer available. This operation was not repeated.')
+                else 'This saved attempt has no readable retained artifact. It may predate durable proposals, have been removed by the history limit, or have a reported history error. This operation was not repeated.')
         return dict(id=record['referenceId'], projectId=record['projectId'], request='Earlier Codex attempt',
                     provider='codex', status=status, baseVersion=result.get('baseVersion'),
                     createdAt=record['createdAt'], finishedAt=result.get('finishedAt'),
@@ -102,7 +308,10 @@ class AgentJobs:
 
     def _replayed(self, record):
         if record['referenceId'] in self._jobs:
-            return dict(self._public(self._jobs[record['referenceId']]), replayed=True)
+            job = self._job(record['referenceId'])
+            self._sync_operation(job, record)
+            job['replayed'] = True
+            return self._public(job)
         return self._durable_job(record)
 
     def _public(self, job):
@@ -111,7 +320,13 @@ class AgentJobs:
     def _job(self, jobid):
         if not isinstance(jobid, str) or jobid not in self._jobs:
             raise Problem('Unknown agent job')
-        return self._jobs[jobid]
+        job = self._jobs[jobid]
+        if job.get('_external'):
+            job = self._read_saved(self._record_path(jobid))
+            self._jobs[jobid] = job
+        elif job.get('recovered'):
+            self._sync_operation(job)
+        return job
 
     def get(self, jobid):
         with self._lock:
@@ -196,8 +411,7 @@ class AgentJobs:
             executable = self._command()
             if not executable:
                 raise Problem('Codex CLI is not installed or is not on PATH. Install and sign in to Codex first.')
-            if len(self._jobs) >= 32:
-                raise Problem('This session has 32 proposals. Save accepted changes and restart Unforge to begin a new session.')
+            self._make_room()
             root = self.engine.root(pid)
             if self.engine.git(root, 'status', '--porcelain'):
                 raise Problem('Save your current changes before asking the agent to work.')
@@ -245,6 +459,7 @@ class AgentJobs:
                         return self._replayed(reservation)
                     job.update(operationId=operation_id, operationState='running', replayed=False)
                 self._jobs[jobid] = job
+                self._persist(job)
                 thread = threading.Thread(target=self._run, args=(job, executable, prompt_file),
                                           name='unforge-agent-' + jobid[:8], daemon=False)
                 job['_thread'] = thread
@@ -252,6 +467,7 @@ class AgentJobs:
                 return self._public(job)
             except Exception:
                 self._jobs.pop(jobid, None)
+                self._record_path(jobid).unlink(missing_ok=True)
                 try:
                     if reservation and not reservation['replayed']:
                         self._ledger('finish', operation_id, 'failed',
@@ -348,6 +564,7 @@ class AgentJobs:
                             with self._lock:
                                 job['output'] = log.decode('utf-8', errors='replace')
                                 job['outputTruncated'] |= len(chunk) > remaining
+                                self._persist(job)
                         else:
                             selector.unregister(key.fileobj)
                     if job['_cancel'].is_set():
@@ -405,8 +622,17 @@ class AgentJobs:
                 job['output'] = log.decode('utf-8', errors='replace')
                 job['status'] = terminal
                 job['finishedAt'] = now()
+                persisted = False
+                try:
+                    self._persist(job)
+                    persisted = True
+                except Exception as exc:
+                    job['status'] = 'unknown'
+                    job['durable'] = False
+                    job['proposalAvailable'] = False
+                    job['error'] = 'The agent ended, but its artifacts could not be saved: ' + str(exc)[:500]
                 if self.operations:
-                    outcome = 'succeeded' if terminal == 'completed' and job['diff'] else 'empty' if terminal == 'completed' else 'failed'
+                    outcome = 'unknown' if not persisted else 'succeeded' if terminal == 'completed' and job['diff'] else 'empty' if terminal == 'completed' else 'failed'
                     result = dict(jobStatus=terminal, baseVersion=job['baseVersion'], finishedAt=job['finishedAt'],
                                   exitCode=job['exitCode'], changedFileCount=len(job['changedFiles']), error=job['error'])
                     try:
@@ -417,6 +643,15 @@ class AgentJobs:
                         # restart will recover the still-running row as unknown.
                         job['operationState'] = 'unknown'
                         job['error'] = 'The attempt ended, but its durable outcome could not be recorded: ' + str(exc)[:500]
+                if persisted:
+                    try:
+                        self._persist(job)
+                    except Exception as exc:
+                        job['error'] = 'Artifacts were saved, but their latest receipt could not be refreshed: ' + str(exc)[:500]
+                # Completed jobs retain bounded review artifacts, not an entire
+                # source snapshot per job as the old session-only cache did.
+                for key in ('_baseline', '_work', '_bundle', '_bundle_hash', '_temporary', '_process'):
+                    job.pop(key, None)
                 job['_done'].set()
 
     def _proposal(self, job):
@@ -474,6 +709,8 @@ class AgentJobs:
             job = self._job(jobid)
             if job['status'] != 'running':
                 return self._public(job)
+            if job.get('_external'):
+                raise Problem('This job belongs to another running Unforge session. Stop it in that session.')
             job['_cancel'].set()
         job['_done'].wait(timeout=8)
         return self.get(jobid)
@@ -510,18 +747,44 @@ class AgentJobs:
                 # One Git apply transaction includes both source and its provenance.
                 patch.write_text(job['diff'] + record_patch, encoding='utf-8')
                 self.engine.git(root, 'apply', '--check', '--index', str(patch))
-                self.engine.git(root, 'apply', '--index', str(patch))
+                job['status'] = 'applying'
+                job['_ownerSession'] = self._session
+                try:
+                    self._persist(job)
+                except Exception:
+                    job['status'] = 'completed'
+                    raise
+                try:
+                    self.engine.git(root, 'apply', '--index', str(patch))
+                except Exception:
+                    job['status'] = 'unknown'
+                    job['note'] = 'Applying this proposal did not finish cleanly. Inspect the working files before making another change.'
+                    self._persist(job)
+                    raise
             job['status'] = 'applied'
+            self._persist(job)
             return self.engine.detail(job['projectId'])
+
+    def desktop_work(self):
+        """Running execution needs a quit decision; saved proposals survive quit."""
+        with self._lock:
+            return sum(job.get('status') == 'running' and not job.get('_external') for job in self._jobs.values())
 
     def close(self):
         with self._lock:
             self._closed = True
             jobs = list(self._jobs.values())
             for job in jobs:
-                if job['status'] == 'running':
+                if job['status'] == 'running' and '_cancel' in job:
                     job['_cancel'].set()
         for job in jobs:
-            job['_thread'].join(timeout=10)
-            if job['_thread'].is_alive():
+            thread = job.get('_thread')
+            if thread is None:
+                continue
+            thread.join(timeout=10)
+            if thread.is_alive():
                 raise Problem('An agent is still shutting down; wait before exiting Unforge.')
+        if self._owner is not None:
+            self._owner.close()
+            self._owner = None
+            self._owner_path.unlink(missing_ok=True)

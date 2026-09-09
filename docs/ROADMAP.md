@@ -2,6 +2,8 @@
 
 Unforge's direction is a provider-independent home for software: understandable to beginners, operable by agents, and usable through different tools. Capabilities below are separated by what the local implementation can establish.
 
+The larger product is specified in [Complete application ownership](COMPLETION-PLAN.md), with a [source-backed completion audit](COMPLETION-AUDIT.md). That proposal defines the application lifecycle, maintained personal variants, dependency removal, portable collaboration and measurable full-use gates. The completion audit tracks the implemented source and remaining full-use gates.
+
 ## Implemented foundation
 
 The app creates local Git projects, imports supported Git bundles, edits text, previews static HTML with scripts disabled, saves versions, restores clean projects, and exports committed history. The local JSON CLI and HTTP API expose the same engine to other tools. An optional installed Codex CLI prepares a proposal in a separate copy for explicit review and application. React supplies the interface; Python's standard library and ordinary Git supply the local runtime. No Unforge account or cloud database is required.
@@ -20,7 +22,11 @@ Success means a person can create, change, recover, and export a project, then c
 
 These capabilities address ownership and operating surprises with evidence the app can actually collect. They are not a universal deployment service or a guarantee of zero operating cost.
 
-## Next: connected application proof
+## Implemented in current source: connected local ownership
+
+Reviewed folder adoption, paginated source/history, durable editor drafts and proposals, local trusted app/check execution, persistent managed app data, encrypted workspace recovery points, automatic change tracking, native iCloud upload metadata and opening a recovered workspace are implemented. See the completion audit for limits. Recovery points are independent full repositories, not cross-point incremental backups; local reconstruction and upload metadata are not second-device recovery evidence.
+
+## Next: production application proof
 
 Support narrowly defined application types with runnable previews and deterministic behavior checks. A clean build should be accompanied by proof that the intended user flow works, that data survives reopening, and that a restored copy can start. Test environments need explicit integration adapters that cannot inherit production destinations or schedules. Only claim these protections for adapters whose boundaries are implemented and tested.
 
@@ -40,4 +46,4 @@ Define portable proposal, discussion, review, and release-decision records, and 
 
 Explore constrained extension points that preserve personal presentation and workflow choices through compatible updates. Arbitrary source edits cannot be promised conflict-free upgrades. The app already lets the user choose text size and technical detail explicitly; richer adaptation should preserve that control.
 
-Public hosting, unattended agent scheduling, production database migration, live cloud cost auditing, peer synchronization, and native desktop distribution remain unimplemented. Neither the MIT license nor local execution changes external providers' terms or makes their services free.
+The native Mac shell and locally signed app packaging are implemented; Developer ID signing, notarization and automatic updates remain future distribution work. Public hosting, unattended agent scheduling, production database migration, live cloud cost auditing and peer synchronization remain unimplemented. Neither the MIT license nor local execution changes external providers' terms or makes their services free.

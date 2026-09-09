@@ -290,7 +290,7 @@ class EngineTests(unittest.TestCase):
                 return status, data
             status, health = call('GET', '/api/health')
             self.assertEqual(status, 200)
-            self.assertEqual(json.loads(health), {'ok': True, 'version': '0.2.0'})
+            self.assertEqual(json.loads(health), {'ok': True, 'version': '0.3.0'})
             status, data = call('GET', '/api/session')
             self.assertEqual(status, 200)
             token = json.loads(data)['token']
