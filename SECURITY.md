@@ -2,6 +2,8 @@
 
 ## Intended boundary
 
+Public releases contain application code and generic examples only. User workspaces, backup keys, provider authentication and cloud destination settings belong outside the source distribution. Each installation uses its current operating-system user's folders and separately configured Codex CLI. Installing the app does not grant access to any publisher account. Cloud backup folders are private unless their owner shares them through the storage provider.
+
 This alpha is a **single-user local application**. The server listens on `127.0.0.1:4319`. It is not a public web service, shared workspace server, or sandbox for untrusted software. Do not expose it through a reverse proxy, tunnel, or public network interface.
 
 Unforge manages files and Git history in its configured data directory. Treat access to your operating-system account and that directory as access to your projects. Disk encryption, device access controls, and independent backups remain the owner's responsibility.

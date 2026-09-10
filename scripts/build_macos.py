@@ -8,15 +8,44 @@ from pathlib import Path
 import platform
 import plistlib
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import venv
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = ROOT / 'artifacts' / 'macos'
 BUILD_ENV = ROOT / '.venv-macos'
 RESTIC_LICENSE_HASHES = {'0.19.1': '6f08a01a9fab5b24e139a09f15cc24a73087c7bc09e3bacf099fdf2d767bf897'}
+
+
+def package_app(app, archive):
+    """Publish app bytes and relative links, without Finder/xattr/owner metadata."""
+    app = Path(app)
+    with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as output:
+        for current, directories, files in os.walk(app, followlinks=False):
+            # Framework symlinks must remain symlinks, never copies of targets.
+            links = [name for name in directories if (Path(current) / name).is_symlink()]
+            directories[:] = sorted(name for name in directories if name not in links)
+            for name in sorted(files + links):
+                path = Path(current) / name
+                if name == '.DS_Store' or name.startswith('._'):
+                    continue
+                info = zipfile.ZipInfo(str(path.relative_to(app.parent)), (1980, 1, 1, 0, 0, 0))
+                info.create_system = 3
+                if path.is_symlink():
+                    target = os.readlink(path)
+                    if os.path.isabs(target) or not path.resolve().is_relative_to(app.resolve()):
+                        raise RuntimeError('App archive contains a link outside the application.')
+                    content = target.encode('utf-8')
+                    mode = stat.S_IFLNK | 0o777
+                else:
+                    content = path.read_bytes()
+                    mode = stat.S_IFREG | (0o755 if path.stat().st_mode & 0o111 else 0o644)
+                info.external_attr = mode << 16
+                output.writestr(info, content, compress_type=zipfile.ZIP_DEFLATED)
 
 
 def run(*args, **kwargs):
@@ -192,7 +221,7 @@ def main():
         shutil.move(app, output)
     archive = ARTIFACTS / f'Unforge-{version}-macos-{architecture}.zip'
     temporary_archive = archive.with_suffix('.zip.tmp')
-    run('ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', output, temporary_archive)
+    package_app(output, temporary_archive)
     temporary_archive.replace(archive)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     (ARTIFACTS / 'SHA256SUMS').write_text(f'{digest}  {archive.name}\n')

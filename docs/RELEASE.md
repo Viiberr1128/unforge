@@ -26,6 +26,10 @@ Source users who want encrypted backups run `python3 scripts/fetch_restic.py` on
 
 ## Verify before publishing
 
+Source packaging refuses untracked files in a Git checkout, private-state filenames, unsupported file types, source maps and linked directories. Stage intended new source files before packaging. Tar headers omit account names and numeric owners; tar/gzip timestamps use `SOURCE_DATE_EPOCH` or zero. Mac ZIPs preserve required framework links and executable permissions while omitting Finder attributes, owner fields and local timestamps. These checks complement content review; they cannot recognize every secret pasted into a legitimate source file.
+
+Inspect Git history as well as the current tree, scan the extracted release for secrets, and inspect archive headers, image metadata, and bundled executable strings before publishing. Use a secret scanner with redacted output, for example `gitleaks git . --redact` and `gitleaks dir PATH_TO_EXTRACTED_RELEASE --redact`. Never include a real workspace, cloud destination settings, authentication directory, recovery key or private validation receipts. Download the published assets and check their hashes and metadata again.
+
 Check the archive's contents for unintended local files or credentials. Extract it to a new directory and start it with a temporary data root. Exercise project creation, editing, saving, restoration, and bundle export from that extracted copy. Record actual validation results in the release notes; the existence of an archive is not evidence that those checks passed.
 
 A recipient can verify the checksum on macOS from the directory containing both files:

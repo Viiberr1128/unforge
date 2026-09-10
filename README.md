@@ -89,6 +89,8 @@ Automated agent tests use a fake executable for controlled failure and cancellat
 
 ## Your files remain yours
 
+Every installation starts with an empty workspace and its own local settings. The public source and installer contain no connected accounts, project backups, recovery passphrases, or provider credentials. Optional Codex jobs use the installed CLI and account on that person's computer. iCloud and Google Drive destinations are folders the user selects in their own storage; downloading Unforge grants no access to the publisher's accounts. There is no Unforge account, central workspace server, or telemetry service.
+
 Projects are stored under `~/.local/share/unforge` by default. Set `UNFORGE_HOME` before starting to choose another location:
 
 ```sh
