@@ -168,6 +168,60 @@ class EngineTests(unittest.TestCase):
             self.engine.restore(self.pid, unsafe)
         self.assertFalse((root / 'bad-link').is_symlink())
 
+    def _assert_imported_history_restore_bounded(self, file_count, blob_bytes):
+        root = self.engine.root(self.pid)
+        original = self.engine.git(root, 'rev-parse', 'HEAD').decode().strip()
+        current_tree = self.engine.git(root, 'rev-parse', 'HEAD^{tree}').decode().strip()
+        metadata_tree = self.engine.git(root, 'rev-parse', 'HEAD:.unforge').decode().strip()
+        # Repeated object references encode a large historical checkout while
+        # the test writes only one small blob and a tree, never the large files.
+        blob_file = Path(self.temp.name) / 'history-blob'
+        blob_file.write_bytes(b'x' * blob_bytes)
+        blob = self.engine.git(root, 'hash-object', '-w', str(blob_file)).decode().strip()
+        entries = [('40000', '.unforge', metadata_tree)] + [
+            ('100644', f'historical-{index:05d}.txt', blob) for index in range(file_count)]
+        tree_file = Path(self.temp.name) / 'history-tree'
+        tree_file.write_bytes(b''.join(mode.encode() + b' ' + name.encode() + b'\0' + bytes.fromhex(oid)
+                                       for mode, name, oid in entries))
+        tree = self.engine.git(root, 'hash-object', '-w', '-t', 'tree', str(tree_file)).decode().strip()
+        oversized = self.engine.git(root, 'commit-tree', tree, '-p', original, '-m', 'Large historical version').decode().strip()
+        current = self.engine.git(root, 'commit-tree', current_tree, '-p', oversized, '-m', 'Small current version').decode().strip()
+        self.engine.git(root, 'update-ref', 'refs/heads/main', current)
+        bundle = Path(self.temp.name) / 'historical.bundle'
+        bundle.write_bytes(self.engine.export(self.pid))
+        self.assertLess(bundle.stat().st_size, 1024 * 1024)
+        imported = self.engine.import_bundle(str(bundle))
+        imported_root = self.engine.root(imported['id'])
+        git = self.engine.git
+
+        def snapshot():
+            return (git(imported_root, 'rev-parse', 'HEAD'),
+                    (imported_root / '.git/index').read_bytes(),
+                    {file.relative_to(imported_root).as_posix(): file.read_bytes()
+                     for file in imported_root.rglob('*')
+                     if '.git' not in file.relative_to(imported_root).parts and file.is_file()})
+
+        before = snapshot()
+
+        def bounded_git(directory, *args, **kwargs):
+            # Keep a regressed implementation from expanding the hostile tree.
+            if args and args[0] == 'restore':
+                self.fail('Oversized historical checkout reached Git restore')
+            return git(directory, *args, **kwargs)
+
+        with patch.object(self.engine, 'git', side_effect=bounded_git), \
+                patch.object(self.engine, 'validate_tree', wraps=self.engine.validate_tree) as validate_tree:
+            with self.assertRaisesRegex(Problem, '128 MiB or 10,000 files'):
+                self.engine.restore(imported['id'], oversized)
+            validate_tree.assert_not_called()
+        self.assertEqual(snapshot(), before)
+
+    def test_restore_refuses_imported_oversized_historical_bytes(self):
+        self._assert_imported_history_restore_bounded(129, 1024 * 1024)
+
+    def test_restore_refuses_imported_oversized_historical_file_count(self):
+        self._assert_imported_history_restore_bounded(10001, 1)
+
     def test_new_file_preconditions(self):
         self.engine.edit(self.pid, 'empty.txt', '', expected_content=None)
         with self.assertRaisesRegex(Problem, 'already exists'):
@@ -290,7 +344,7 @@ class EngineTests(unittest.TestCase):
                 return status, data
             status, health = call('GET', '/api/health')
             self.assertEqual(status, 200)
-            self.assertEqual(json.loads(health), {'ok': True, 'version': '0.3.0'})
+            self.assertEqual(json.loads(health), {'ok': True, 'version': '0.3.1'})
             status, data = call('GET', '/api/session')
             self.assertEqual(status, 200)
             token = json.loads(data)['token']
@@ -320,6 +374,69 @@ class EngineTests(unittest.TestCase):
                     status, data = call('POST', endpoint, headers, payload)
                     self.assertEqual(status, 400)
                     self.assertIn('error', json.loads(data))
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join()
+
+    def test_http_reads_reject_foreign_browser_context_and_preserve_local_clients(self):
+        from unforge import Client
+        (Path(self.temp.name) / 'index.html').write_text('<!doctype html><title>Local app</title>')
+        server = Server(('127.0.0.1', 0), self.engine, self.temp.name)
+        worker = threading.Thread(target=server.serve_forever)
+        worker.start()
+        try:
+            origin = f'http://127.0.0.1:{server.server_port}'
+
+            def read(path, headers):
+                client = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=5)
+                try:
+                    client.request('GET', path, headers=headers)
+                    response = client.getresponse()
+                    return response.status, dict(response.getheaders()), response.read()
+                finally:
+                    client.close()
+
+            for headers in (
+                {'Origin': 'https://evil.example'},
+                {'Origin': 'null'},
+                {'Origin': 'http://127.0.0.1:9999'},
+                {'Sec-Fetch-Site': 'cross-site'},
+                {'Sec-Fetch-Site': 'same-site'},
+                {'Origin': origin, 'Sec-Fetch-Site': 'cross-site'},
+                {'Origin': 'https://evil.example', 'Sec-Fetch-Site': 'same-origin'},
+            ):
+                for path in ('/api/session', '/api/projects', f'/api/projects/{self.pid}/export', '/'):
+                    with self.subTest(headers=headers, path=path):
+                        status, _, body = read(path, headers)
+                        self.assertEqual(status, 403)
+                        self.assertNotIn(server.token.encode(), body)
+                        self.assertNotIn(b'Garden', body)
+
+            # CLI and native URLSession omit browser metadata. WKWebView direct
+            # navigation uses none/absent; application fetches use same-origin.
+            self.assertTrue(Client(server.server_port).call('/health')['ok'])
+            for headers in ({}, {'Sec-Fetch-Site': 'none'}, {'Sec-Fetch-Site': 'same-origin'},
+                            {'Origin': origin, 'Sec-Fetch-Site': 'same-origin'}):
+                with self.subTest(local_headers=headers):
+                    status, _, body = read('/api/session', headers)
+                    self.assertEqual(status, 200)
+                    self.assertEqual(json.loads(body)['token'], server.token)
+            # The development proxy rewrites its trusted Origin to the backend
+            # origin and retains the browser's same-origin fetch metadata.
+            status, _, body = read('/api/projects', {'Origin': origin, 'Sec-Fetch-Site': 'same-origin'})
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)['projects'][0]['id'], self.pid)
+            localhost = f'localhost:{server.server_port}'
+            self.assertEqual(read('/api/session', {'Host': localhost, 'Origin': 'http://' + localhost,
+                                                   'Sec-Fetch-Site': 'same-origin'})[0], 200)
+            for path in ('/', '/api/session'):
+                status, headers, _ = read(path, {})
+                self.assertEqual(status, 200)
+                self.assertEqual(headers['Referrer-Policy'], 'no-referrer')
+                policy = headers['Content-Security-Policy']
+                for directive in ("base-uri 'none'", "form-action 'none'", "object-src 'none'"):
+                    self.assertIn(directive, policy)
         finally:
             server.shutdown()
             server.server_close()

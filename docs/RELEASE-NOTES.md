@@ -1,3 +1,19 @@
+# Unforge 0.3.1 — security hardening and public information
+
+Historical source restoration now checks the same expanded-byte and file-count limits as project import before writing files. Regression cases cover a small current version with oversized historical ancestors and preserve the current source when restoration is refused.
+
+The local server rejects browser reads from other origins and adds tighter content and referrer policies. Native clients and direct local navigation remain supported. Existing mutation session checks, static preview isolation, encrypted backup and safe import boundaries remain in place.
+
+Runtime process cleanup now retries a brief macOS exit race while still refusing to report success if a live group remains or inspection fails.
+
+The website adds About, Terms of Use, Privacy Policy and Cookie Policy pages. The privacy and security notices accurately describe persistent local AI requests, output and proposals, optional providers, unencrypted working data and encrypted backups. Private vulnerability reporting is available in the official repository.
+
+This is still an alpha. The source review was bounded and is not an independent penetration test or proof that all vulnerabilities have been found. The Mac archive remains ad-hoc signed, not Developer ID signed or Apple-notarized. Trusted project execution is not a hostile-code sandbox. No account or telemetry backend is added.
+
+Validation: 296 Python tests passed, four frontend tests and the production build passed, and npm audit reported zero known vulnerabilities. The new historical-restore and process-cleanup regressions were also checked by removing the relevant guard in memory and confirming test failure. The information pages were checked at desktop and 390-pixel phone widths. These checks do not constitute an independent penetration test.
+
+---
+
 # Unforge 0.3.0 — durable local work and encrypted recovery
 
 This is a working alpha for local ownership and private qualification. It is not a production migration or a claim that all GitHub services have been replaced.

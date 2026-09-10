@@ -12,9 +12,20 @@ The optional Codex adapter uses the existing CLI account and runs in a separate 
 
 The core does not need an external service. Choosing an agent job can send project context to the configured provider and consume account allowance or incur charges. No provider credentials are requested by Unforge. The timeout, output bounds, and daily attempt allowance are operational limits, not a hard financial cap. One attempt can consume varying provider usage, and the ledger cannot govern calls made outside it. Automated adapter tests use a fake executable. A previous live Codex smoke test completed a specified README edit in a disposable project through apply, save, and export. This is limited integration evidence, not a general AI-quality or deployment guarantee.
 
-The adapter prepares a diff without applying it to the source project. Acceptance refuses a dirty project or changed base version. Accepted metadata persists under `.unforge/proposals/`; raw logs and unaccepted proposals remain session-only. Review results before accepting and saving. The adapter does not implement deployment, provider provisioning, or arbitrary agent selection.
+The adapter prepares a diff without applying it to the source project. Acceptance refuses a dirty project or changed base version. Accepted metadata persists under `.unforge/proposals/`. Requests, bounded raw output, and accepted or unaccepted proposals persist locally under `.agent-jobs` so work can survive a restart. These records may contain private project context and are included in encrypted workspace backups; clearing browser storage does not delete them. Review results before accepting and saving. The adapter does not implement deployment, provider provisioning, or arbitrary agent selection.
 
 Only one server can hold a data directory at a time; a local lock prevents concurrent servers using the same home. The supported runtime platforms are macOS and Linux.
+
+## Built-in protections
+
+- Loopback access, exact Host and Origin checks, and a fresh session token protect browser mutations. This is not authentication between processes sharing your OS account.
+- Static project previews cannot execute scripts, submit forms, load external resources, or access the parent workspace.
+- Imports and restoration validate paths, file kinds, case/Unicode collisions and checkout expansion before writing project files. Git hooks and inherited Git configuration are disabled for managed operations.
+- AI work is proposed separately and acceptance checks the exact clean base. Trusted project runs are explicitly unsandboxed; only run software you trust.
+- Encrypted backups use Restic, immutable publication and content verification. Restore creates a separate workspace. Keep the passphrase separately from the device and verify recovery.
+- Release packaging refuses private-state files, untracked source, source maps and unsafe links. Public source and downloadable artifacts still require content and history review.
+
+The official public repository has dependency vulnerability alerts, secret scanning, push protection and private vulnerability reporting enabled. These are distribution protections, not dependencies of the local app. A source review and regression tests do not establish that every vulnerability has been found. The Mac release is ad-hoc signed, not Developer ID signed or notarized.
 
 ## Project care and local practice
 
@@ -28,7 +39,7 @@ The durable SQLite operation ledger binds IDs to a project, kind, and payload ha
 
 For a non-sensitive bug, provide a minimal reproduction using a disposable project. Include the operating system, Python and Git versions, and expected versus actual behavior.
 
-For a vulnerability, use a private reporting channel provided by the repository host if one is available. This project does not yet advertise a dedicated private security contact. Do not put working exploits, credentials, private project contents, or personal data into a public issue. If no private channel is available, request one without including sensitive details.
+Report vulnerabilities through [GitHub private vulnerability reporting](https://github.com/Viiberr1128/unforge/security/advisories/new), enabled for the official repository. Do not put working exploits, credentials, private project contents, or personal data into a public issue. Share a minimal disposable reproduction privately. Fork maintainers should enable their own private reporting channel.
 
 There is no published security support SLA. Review fixes and release notes before upgrading; this alpha has not undergone an independent security audit.
 

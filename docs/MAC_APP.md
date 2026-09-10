@@ -134,7 +134,7 @@ the app locally, verifies that signature, and writes:
 
 ```text
 artifacts/macos/Unforge.app
-artifacts/macos/Unforge-0.3.0-macos-arm64.zip
+artifacts/macos/Unforge-0.3.1-macos-arm64.zip
 artifacts/macos/SHA256SUMS
 ```
 

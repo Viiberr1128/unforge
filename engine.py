@@ -331,6 +331,9 @@ class Engine:
         return metadata
 
     def validate_restore(self, root, revision):
+        # Import bounds the selected HEAD, not every preserved historical tree.
+        # Check expansion before parsing metadata or changing the index/worktree.
+        self.validate_checkout_size(root, revision)
         self.validate_tree(root, revision)
         target_paths = self.git(root, 'ls-tree', '-rz', '--name-only', revision).decode('utf-8').split('\0')
         # Be conservative across filesystems: macOS commonly treats case and
@@ -476,7 +479,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'")
+        self.send_header('Content-Security-Policy', "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'; object-src 'none'")
+        self.send_header('Referrer-Policy', 'no-referrer')
         if disposition:
             self.send_header('Content-Disposition', disposition)
         self.end_headers()
@@ -488,12 +492,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.host_ok():
             return self.send(403, dict(error='Invalid host'))
+        # Browser reads must originate here. Native/CLI clients and direct
+        # navigation may omit these browser headers; Host remains mandatory.
+        origin = self.headers.get('Origin')
+        site = self.headers.get('Sec-Fetch-Site')
+        if (origin is not None and origin != f'http://{self.headers.get("Host")}') or site not in (None, 'none', 'same-origin'):
+            return self.send(403, dict(error='Cross-origin reads are not allowed'))
         try:
             path = unquote(urlsplit(self.path).path)
             if path == '/api/health':
-                return self.send(200, dict(ok=True, version='0.3.0'))
+                return self.send(200, dict(ok=True, version='0.3.1'))
             if path == '/api/desktop':
-                return self.send(200, dict(app='unforge', protocol=1, version='0.3.0',
+                return self.send(200, dict(app='unforge', protocol=1, version='0.3.1',
                     workspace=str(self.server.engine.home), pid=os.getpid(),
                     desktopId=getattr(self.server, 'desktop_id', ''),
                     managed=getattr(self.server, 'desktop_managed', False),

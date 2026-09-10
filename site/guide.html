@@ -43,14 +43,14 @@
 <article class="article">
 <section id="install">
 <h2>Install on Mac</h2>
-<p>Version 0.3 is a working alpha for Apple silicon Macs running macOS 13 or later. Git 2.30 or later is required.</p>
+<p>Version 0.3.1 is a working alpha for Apple silicon Macs running macOS 13 or later. Git 2.30 or later is required.</p>
 <ol>
 <li>Download and open the ZIP.</li>
 <li>Move <strong>Unforge.app</strong> to Applications.</li>
 <li>Open Unforge. This build is locally signed, <strong>not notarized by Apple</strong>. If macOS blocks it, review the download, then use <strong>System Settings → Privacy &amp; Security → Open Anyway</strong> for a build you trust.</li>
 </ol>
 <div class="actions">
-<a class="button" href="/downloads/Unforge-0.3.0-macos-arm64.zip" download>Download for Mac</a>
+<a class="button" href="/downloads/Unforge-0.3.1-macos-arm64.zip" download>Download for Mac</a>
 <a href="/downloads/SHA256SUMS.txt">Checksums</a>
 </div>
 <p>No Terminal, Python, or Node setup is needed to open the Mac app. If Git is missing, Unforge explains how to install Apple’s command line tools. Projects you run may need their own tools.</p>
@@ -99,12 +99,12 @@
 </section>
 <section id="source">
 <h2>Source &amp; requirements</h2>
-<p>Unforge’s mission is to make GitHub obsolete for people who want to own their software workflow. It is an open-source GitHub-killer in the making; version 0.3 is a working alpha.</p>
+<p>Unforge’s mission is to make GitHub obsolete for people who want to own their software workflow. It is an open-source GitHub-killer in the making; version 0.3.1 is a working alpha.</p>
 <p><a href="https://github.com/Viiberr1128/unforge">Find Unforge on GitHub →</a></p>
 <p class="note">The public repository and source archive are available to download, inspect, and build.</p>
 <p>The built source release runs on macOS or Linux with <strong>Python 3.10+</strong> and <strong>Git 2.30+</strong>. It includes the built interface, so running it does not require Node.</p>
 <div class="actions">
-<a class="button" href="/downloads/unforge-0.3.0.tar.gz" download>Download source</a>
+<a class="button" href="/downloads/unforge-0.3.1.tar.gz" download>Download source</a>
 <a href="/downloads/SHA256SUMS.txt">Checksums</a>
 </div>
 <p>Extract the archive. In its folder, run:</p>
@@ -120,7 +120,7 @@
 <h3>Check a download</h3>
 <p>Download the checksum file into the same folder as the archive. On macOS, calculate its SHA-256 checksum:</p>
 <pre>
-<code>shasum -a 256 Unforge-0.3.0-macos-arm64.zip</code>
+<code>shasum -a 256 Unforge-0.3.1-macos-arm64.zip</code>
 </pre>
 <p>Compare the result with the matching filename in <strong>SHA256SUMS.txt</strong>. A matching checksum checks file integrity; it does not turn an ad-hoc signature into Apple notarization.</p>
 <h3>Update without moving your work</h3>
@@ -128,7 +128,7 @@
 </section>
 <section id="alpha">
 <h2>What this alpha does</h2>
-<p>Unforge 0.3 supports local projects, named Git versions, draft recovery, optional Codex proposals, trusted local runs and checks, and encrypted workspace recovery points. Every installation starts with an empty workspace and its own settings.</p>
+<p>Unforge 0.3.1 supports local projects, named Git versions, draft recovery, optional Codex proposals, trusted local runs and checks, and encrypted workspace recovery points. A first-time user starts with an empty workspace and their own settings. Upgrading the app keeps the existing workspace outside the app bundle.</p>
 <p>It does not yet provide public deployment adapters, live provider billing controls, peer collaboration, support for every repository type, sandboxed execution of untrusted apps, or notarized desktop distribution.</p>
 <p>Project commands run with your Mac account’s permissions and can access the network. Only run code you trust. Built-in pretend actions do not put your real app’s integrations into test mode.</p>
 <p>Unforge itself is free and MIT licensed. AI providers, production hosting, storage, and other services you connect retain their own limits and charges. Keep existing production and data recovery arrangements until your replacement workflow is verified.</p>
@@ -138,8 +138,14 @@
 </div>
 </main>
 <footer class="site-footer wrap">
-<a class="brand" href="/">unforge</a>
-<p>MIT licensed. No website analytics.</p>
+<div class="footer-identity"><a class="brand" href="/">unforge</a><p>MIT licensed. No advertising or analytics scripts.</p></div>
+<nav class="footer-links" aria-label="Information">
+<a href="/about.html">About</a>
+<a href="/terms.html">Terms of Use</a>
+<a href="/privacy.html">Privacy Policy</a>
+<a href="/cookies.html">Cookie Policy</a>
+<a href="https://github.com/Viiberr1128/unforge/blob/main/SECURITY.md">Security</a>
+</nav>
 </footer>
 </body>
 </html>

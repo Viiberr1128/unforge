@@ -9,12 +9,48 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from engine import Engine, Problem
-from runtime import ACTIVE, MAX_LOG, RuntimeService, validate
+from runtime import ACTIVE, MAX_LOG, RuntimeService, terminate_process_group, validate
+
+
+class ProcessCleanupTests(unittest.TestCase):
+    def test_permission_race_waits_for_reaped_child_and_zombie_only_group(self):
+        child = Mock(pid=12345)
+        child.poll.side_effect = [None, None] + [0] * 20
+        zombie = subprocess.CompletedProcess([], 0, 'Z\n', '')
+        with patch('runtime.os.killpg', side_effect=PermissionError(1, 'Operation not permitted')) as kill, \
+                patch('runtime.subprocess.run', return_value=zombie) as inspect, \
+                patch('runtime.time.sleep') as sleep:
+            terminate_process_group(child)
+        self.assertGreaterEqual(kill.call_count, 4)
+        sleep.assert_called_with(.02)
+        self.assertTrue(all(call.args[0] == ['ps', '-o', 'stat=', '-g', '12345'] for call in inspect.call_args_list))
+        child.wait.assert_called_once_with(timeout=5)
+
+    def test_permission_denial_with_live_group_still_fails_cleanup(self):
+        child = Mock(pid=12345)
+        child.poll.return_value = 0
+        live = subprocess.CompletedProcess([], 0, 'S\n', '')
+        with patch('runtime.os.killpg', side_effect=PermissionError(1, 'Operation not permitted')) as kill, \
+                patch('runtime.subprocess.run', return_value=live), patch('runtime.time.sleep'):
+            with self.assertRaises(PermissionError):
+                terminate_process_group(child)
+        self.assertEqual(kill.call_count, 5)
+        child.wait.assert_not_called()
+
+    def test_failed_group_inspection_is_not_treated_as_empty_group(self):
+        child = Mock(pid=12345)
+        child.poll.return_value = 0
+        failed = subprocess.CompletedProcess([], 2, '', 'process inspection failed')
+        with patch('runtime.os.killpg', side_effect=PermissionError(1, 'Operation not permitted')), \
+                patch('runtime.subprocess.run', return_value=failed):
+            with self.assertRaises(PermissionError):
+                terminate_process_group(child)
+        child.wait.assert_not_called()
 
 
 class RuntimeTests(unittest.TestCase):

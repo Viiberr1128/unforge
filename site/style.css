@@ -170,3 +170,17 @@ h1{letter-spacing:-3px}
 @media(max-width:1200px){.mission{gap:45px}.mission h2{font-size:52px}}
 @media(max-width:900px){.mission{grid-template-columns:1fr;gap:25px;padding-block:42px}.mission h2{font-size:48px}.nav{gap:12px 24px}}
 @media(max-width:540px){.mission h2{font-size:42px}.mission p{font-size:19px}.mission .repo-status{font-size:15px}.mission .mission-source{font-size:20px}}
+
+/* Readable information pages and shared navigation. */
+.site-footer{flex-wrap:wrap;padding-block:30px;border-top:1px solid var(--line)}
+.footer-identity{display:grid;gap:15px;flex:1 1 280px}
+.footer-links{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:12px 24px;flex:1 1 420px;max-width:640px}
+.footer-links a{padding-block:7px}
+.footer-links [aria-current=page]{font-weight:600;text-decoration-thickness:2px}
+.policy-date{color:var(--muted);font-size:16px;margin:22px 0 0}
+.information-page .article{max-width:780px;min-width:0;overflow-wrap:break-word}
+.information-page .article h2{font-size:clamp(32px,3.5vw,46px)}
+.information-page .article .small{font-size:16px}
+.information-page .guide-heading .lead{max-width:900px}
+@media(max-width:900px){.footer-links{justify-content:flex-start;max-width:none}}
+@media(max-width:540px){.footer-identity,.footer-links{flex-basis:auto}.footer-links{gap:8px 20px}.policy-date{font-size:14px}.information-page .guide-heading h1{font-size:46px}.information-page .article section{padding-bottom:28px;margin-bottom:28px}}

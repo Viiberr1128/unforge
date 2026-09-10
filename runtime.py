@@ -579,6 +579,46 @@ def persistent_data_lock(folder, project_id):
     return fd
 
 
+def terminate_process_group(child):
+    """Stop an owned child group, including macOS's transient exit/EPERM race."""
+    if child is None:
+        return
+
+    def send(sig):
+        for attempt in range(5):
+            # A group can disappear while its direct child is still becoming
+            # waitable. Reaping once before killpg does not close that race.
+            child.poll()
+            try:
+                os.killpg(child.pid, sig)
+                return True
+            except ProcessLookupError:
+                return False
+            except PermissionError:
+                if child.poll() is not None:
+                    inspection = subprocess.run(['ps', '-o', 'stat=', '-g', str(child.pid)],
+                                                capture_output=True, text=True, timeout=1)
+                    # ps returns 1 for an empty selection. Inspection failures
+                    # must not be mistaken for evidence that the group is gone.
+                    if inspection.returncode not in (0, 1) or inspection.stderr.strip():
+                        raise
+                    states = inspection.stdout.split()
+                    if all(state.startswith('Z') for state in states):
+                        return False
+                if attempt == 4:
+                    raise
+                # Retry only this owned group. A persistent denial or a live
+                # member still fails cleanup; neither is reported as success.
+                time.sleep(.02)
+
+    send(signal.SIGTERM)
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and send(0):
+        time.sleep(.03)
+    send(signal.SIGKILL)
+    child.wait(timeout=5)
+
+
 def worker_main(manifest_path):
     """Private subprocess entrypoint. Parent-pipe EOF stops the owned process group."""
     folder = Path(manifest_path).resolve().parent
@@ -621,31 +661,6 @@ def worker_main(manifest_path):
             stream.write(log)
     def stop_requested():
         return stopped.is_set() or (folder / 'stop').exists()
-    def terminate_group(child):
-        if child is None:
-            return
-        def send(sig):
-            # Reap the direct child first: macOS reports EPERM for a process
-            # group containing only an unreaped zombie, even for signal zero.
-            child.poll()
-            try:
-                os.killpg(child.pid, sig)
-                return True
-            except ProcessLookupError:
-                return False
-            except PermissionError:
-                if child.poll() is not None:
-                    states = subprocess.run(['ps', '-o', 'stat=', '-g', str(child.pid)],
-                                            capture_output=True, text=True, timeout=3).stdout.split()
-                    if all(state.startswith('Z') for state in states):
-                        return False
-                raise
-        send(signal.SIGTERM)
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline and send(0):
-            time.sleep(.03)
-        send(signal.SIGKILL)
-        child.wait(timeout=5)
     def command(name, timeout):
         nonlocal process
         argv = [arg.replace('{port}', str(manifest['port'])) for arg in manifest['commands'][name]]
@@ -692,7 +707,7 @@ def worker_main(manifest_path):
                     atomic_json(path, record)
         finally:
             selector.close()
-            terminate_group(process)
+            terminate_process_group(process)
             process.stdout.close()
             process = None
     try:
@@ -744,7 +759,7 @@ def worker_main(manifest_path):
         if server:
             server.server_close()
         try:
-            terminate_group(process)
+            terminate_process_group(process)
         except OSError as exc:
             record.update(status='failed', error='Could not verify process cleanup: ' + str(exc))
         if lock is not None:

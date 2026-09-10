@@ -28,4 +28,4 @@ jobs:
       - run: python3 scripts/fetch_restic.py
       - run: ./check.sh
       - run: python3 scripts/package_release.py
-      - run: python3 scripts/smoke_release.py artifacts/unforge-0.3.0.tar.gz
+      - run: python3 scripts/smoke_release.py artifacts/unforge-0.3.1.tar.gz
