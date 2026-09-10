@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Install Unforge on your Mac, save your first project version, set up encrypted backups, and recover a separate workspace.">
+<meta name="theme-color" content="#faf9f6">
+<title>Install &amp; recover — Unforge</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header wrap">
+<a class="brand" href="/" aria-label="Unforge home">
+<svg viewBox="0 0 42 48" aria-hidden="true">
+<path d="M5 4v25a16 16 0 0 0 32 0V4H27v25a6 6 0 0 1-12 0V4Z" fill="none" stroke="currentColor" stroke-width="2.4"/>
+</svg>
+<span>unforge</span>
+</a>
+<nav class="nav" aria-label="Main">
+<a href="/#how-it-works">How it works</a>
+<a href="/guide.html" aria-current="page">Install &amp; recover</a>
+</nav>
+</header>
+<main id="main" class="wrap">
+<div class="guide-heading">
+<h1>A good start. A way back.</h1>
+<p class="lead">Install Unforge, save your first version, and give your work a recovery plan.</p>
+</div>
+<div class="guide-layout">
+<aside class="contents">
+<nav aria-label="On this page">
+<a href="#install">Install on Mac</a>
+<a href="#first-project">Your first project</a>
+<a href="#backup">Back up your workspace</a>
+<a href="#recover">Recover a separate copy</a>
+<a href="#source">Source &amp; requirements</a>
+<a href="#alpha">What this alpha does</a>
+</nav>
+</aside>
+<article class="article">
+<section id="install">
+<h2>Install on Mac</h2>
+<p>Version 0.3 is a working alpha for Apple silicon Macs running macOS 13 or later. Git 2.30 or later is required.</p>
+<ol>
+<li>Download and open the ZIP.</li>
+<li>Move <strong>Unforge.app</strong> to Applications.</li>
+<li>Open Unforge. This build is locally signed, <strong>not notarized by Apple</strong>. If macOS blocks it, review the download, then use <strong>System Settings → Privacy &amp; Security → Open Anyway</strong> for a build you trust.</li>
+</ol>
+<div class="actions">
+<a class="button" href="/downloads/Unforge-0.3.0-macos-arm64.zip" download>Download for Mac</a>
+<a href="/downloads/SHA256SUMS.txt">Checksums</a>
+</div>
+<p>No Terminal, Python, or Node setup is needed to open the Mac app. If Git is missing, Unforge explains how to install Apple’s command line tools. Projects you run may need their own tools.</p>
+<p class="small">Compatibility with every macOS release has not been tested. Keep macOS protections enabled; do not disable Gatekeeper system-wide.</p>
+</section>
+<section id="first-project">
+<h2>Your first project</h2>
+<p>Start with a small project. Save a file, then <strong>Save a version</strong> to preserve that change in history.</p>
+<ol>
+<li>Create a project, copy a supported local folder, or import a supported Git bundle. Folder adoption copies into Unforge’s managed workspace and leaves the original folder in place.</li>
+<li>In <strong>Project care → Your brief</strong>, describe what the project does and one thing that must keep working. Write the notes, then save a version.</li>
+<li>Write a request for your preferred coding agent. To use optional Codex proposals, install and sign in to your own Codex CLI first. Codex works in a separate checkout; review the changes before applying them.</li>
+<li>Run the project’s configured checks, review what changed, and save a named version. Saving a file and saving a version are separate steps.</li>
+</ol>
+<p>Your projects remain ordinary folders with Git history. You can open them with other tools and export committed history as a Git bundle. You do not need a GitHub or Unforge account.</p>
+<p class="note">AI access is optional and uses your own provider account. Unforge does not include AI credits. Its attempt allowance limits routed starts, not provider charges.</p>
+</section>
+<section id="backup">
+<h2>Back up your workspace</h2>
+<p>Keep active projects on local storage. Put completed encrypted recovery copies in the storage you choose.</p>
+<ol>
+<li>Open <strong>Backups &amp; recovery</strong>. Choose a destination outside the active workspace: iCloud Drive, a Google Drive desktop sync folder, or another drive.</li>
+<li>Save your recovery passphrase somewhere you can access without this Mac, such as a password manager. A backup cannot recover a lost passphrase.</li>
+<li>Create a recovery point. Unforge checks it through a complete local restore before reporting it as locally verified.</li>
+<li>Check upload status separately. A copy in a sync folder does not prove the upload finished. On first use, allow Unforge’s macOS iCloud Drive permission prompt.</li>
+<li>For iCloud, use <strong>Test recovery from iCloud</strong> to download the uploaded copy and verify that it can be decrypted and restored. Enable automatic backups if you want Unforge to group changes while it is open.</li>
+</ol>
+<p>
+<strong>Keep the entire <code>.ufvault</code> folder.</strong> The <code>.ufpoint</code> inside it identifies a recovery point; it is not a standalone backup. Unchanged contents are shared between points. Older standalone <code>.ufbackup</code> copies remain recoverable.</p>
+<p>Automatic backups normally group changes no more than once every five minutes while Unforge is open. Quitting the app stops its automatic backups. No points are automatically pruned, so check available storage and upload results.</p>
+<p class="note">Workspace backups cover managed files, history, drafts, proposals, and managed local app data. Hosted databases, uploads stored elsewhere, Git LFS payloads, and external credentials need their own backup arrangements. Moving source code does not move or back up a hosted database.</p>
+<p>A passphrase stored in the same cloud account as its backup can protect against losing your Mac, but does not protect against that account being compromised. An independent destination copy adds protection against damage to shared backup files.</p>
+</section>
+<section id="recover">
+<h2>Recover a separate copy</h2>
+<p>Test recovery before you need it. You can rehearse on the same Mac; you do not need to buy or borrow another computer.</p>
+<ol>
+<li>Install Unforge and download the <strong>complete <code>.ufvault</code> folder</strong> from your storage. Have your recovery passphrase ready.</li>
+<li>In <strong>Backups &amp; recovery</strong>, select a <code>.ufpoint</code> inside the vault’s <code>points</code> folder. For an older backup, choose the <code>.ufbackup</code> instead.</li>
+<li>Choose <strong>Recover a separate copy</strong> and enter your passphrase. Restoration creates a separate workspace instead of overwriting the current one.</li>
+<li>In the Mac app, choose <strong>File → Open Workspace…</strong> and open the recovered folder.</li>
+<li>Check your files and history. Restore any separately backed-up hosted data or credentials when needed, then test the project’s important behaviors. Reconfigure the backup destination for the recovered workspace.</li>
+</ol>
+<p>Recovery does not automatically run apps or external actions. A successful restore proves the saved files can be reconstructed; it does not prove every login or integration works. A same-Mac test also does not test your ability to sign in to the cloud account after losing the Mac.</p>
+<p class="note">Keep a copy of the installer, this guide, and your recovery passphrase accessible without the original laptop. Use one active backup writer per workspace; a synced vault is not multi-Mac collaboration.</p>
+</section>
+<section id="source">
+<h2>Source &amp; requirements</h2>
+<p>The built source release runs on macOS or Linux with <strong>Python 3.10+</strong> and <strong>Git 2.30+</strong>. It includes the built interface, so running it does not require Node.</p>
+<div class="actions">
+<a class="button" href="/downloads/unforge-0.3.0.tar.gz" download>Download source</a>
+<a href="/downloads/SHA256SUMS.txt">Checksums</a>
+</div>
+<p>Extract the archive. In its folder, run:</p>
+<pre>
+<code>./start.sh</code>
+</pre>
+<p>Open the local address printed in the terminal and keep that terminal running. On macOS, you can also double-click <code>start.command</code>. The core runtime works locally without a cloud account.</p>
+<p>Source users fetch the pinned backup tool once with:</p>
+<pre>
+<code>python3 scripts/fetch_restic.py</code>
+</pre>
+<p>Changing and rebuilding the frontend additionally requires Node.js 22.12+ with npm. The archive includes the README, contributor guide, API documentation, recovery details, and MIT license.</p>
+<h3>Check a download</h3>
+<p>Download the checksum file into the same folder as the archive. On macOS, calculate its SHA-256 checksum:</p>
+<pre>
+<code>shasum -a 256 Unforge-0.3.0-macos-arm64.zip</code>
+</pre>
+<p>Compare the result with the matching filename in <strong>SHA256SUMS.txt</strong>. A matching checksum checks file integrity; it does not turn an ad-hoc signature into Apple notarization.</p>
+<h3>Update without moving your work</h3>
+<p>Make a fresh backup, quit Unforge, then replace the app bundle. Workspace files are stored separately from the application. This alpha does not install an automatic updater.</p>
+</section>
+<section id="alpha">
+<h2>What this alpha does</h2>
+<p>Unforge 0.3 supports local projects, named Git versions, draft recovery, optional Codex proposals, trusted local runs and checks, and encrypted workspace recovery points. Every installation starts with an empty workspace and its own settings.</p>
+<p>It does not yet provide public deployment adapters, live provider billing controls, peer collaboration, support for every repository type, sandboxed execution of untrusted apps, or notarized desktop distribution.</p>
+<p>Project commands run with your Mac account’s permissions and can access the network. Only run code you trust. Built-in pretend actions do not put your real app’s integrations into test mode.</p>
+<p>Unforge itself is free and MIT licensed. AI providers, production hosting, storage, and other services you connect retain their own limits and charges. Keep existing production and data recovery arrangements until your replacement workflow is verified.</p>
+<p>This website has no forms, analytics, remote fonts, or third-party scripts. The app has no Unforge login, central workspace server, or telemetry service.</p>
+</section>
+</article>
+</div>
+</main>
+<footer class="site-footer wrap">
+<a class="brand" href="/">unforge</a>
+<p>MIT licensed. No website analytics.</p>
+</footer>
+</body>
+</html>

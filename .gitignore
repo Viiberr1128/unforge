@@ -31,3 +31,6 @@ recovery-key.*
 *.bundle
 *.zip
 *.log
+
+# Published release files are staged locally for static deployment.
+site/downloads/
