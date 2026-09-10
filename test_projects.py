@@ -182,6 +182,67 @@ class ProjectsTests(unittest.TestCase):
         result = self.adopt(allow_partial=True)
         self.assertFalse((self.engine.root(result['project']['id']) / 'private-local.txt').exists())
 
+    def test_git_info_exclude_is_applied_without_default_git_template(self):
+        self.init()
+        self.put('app.py')
+        self.git('add', '.')
+        self.git('commit', '-m', 'Initial')
+        exclude = self.source / '.git/info/exclude'
+        exclude.parent.mkdir()
+        exclude.write_text('local-notes.txt\n')
+        self.put('local-notes.txt', 'private local fixture')
+        old_index = (self.source / '.git/index').read_bytes()
+        result = self.adopt(allow_partial=True)
+        root = self.engine.root(result['project']['id'])
+        self.assertTrue((root / 'app.py').exists())
+        self.assertFalse((root / 'local-notes.txt').exists())
+        self.assertEqual(exclude.read_text(), 'local-notes.txt\n')
+        self.assertEqual((self.source / '.git/index').read_bytes(), old_index)
+
+    def test_tracked_source_under_ambiguous_directories_is_preserved(self):
+        self.init()
+        paths = ['src/data/catalog.ts', 'uploads/parser/handler.py', 'scripts/backups/export.py']
+        for name in paths:
+            self.put(name, 'tracked source')
+        self.git('add', '.')
+        self.git('commit', '-m', 'Track application source')
+        self.put('src/data/catalog.ts', 'edited source')
+        # Tracked source wins over ignore rules, but neighboring runtime files
+        # and whole untracked subdirectories must still be omitted.
+        self.put('.gitignore', 'data/\nuploads/\nbackups/\n')
+        self.put('src/data/private.json', 'runtime fixture')
+        self.put('uploads/parser/raw.txt', 'runtime fixture')
+        self.put('scripts/backups/archive/original.txt', 'runtime fixture')
+        original_status = self.git('status', '--porcelain')
+        result = self.adopt(allow_partial=True)
+        root = self.engine.root(result['project']['id'])
+        for name in paths:
+            self.assertEqual((root / name).read_bytes(), (self.source / name).read_bytes())
+        self.assertFalse((root / 'src/data/private.json').exists())
+        self.assertFalse((root / 'uploads/parser/raw.txt').exists())
+        self.assertFalse((root / 'scripts/backups/archive').exists())
+        self.assertEqual(self.git('status', '--porcelain'), original_status)
+
+    def test_tracked_status_does_not_bypass_private_or_runtime_boundaries(self):
+        self.init()
+        self.put('data/source.py')
+        blocked = ['data/.env', 'data/credentials.json', 'data/key.pem', 'data/live.sqlite',
+                   'data/node_modules/pkg/source.js', 'backups/secrets/private.txt',
+                   'uploads/.recovery/old.py']
+        for name in blocked:
+            self.put(name, 'synthetic private fixture')
+        external = self.base / 'external.txt'
+        external.write_text('external fixture')
+        (self.source / 'data/linked.py').symlink_to(external)
+        self.git('add', '.')
+        self.git('commit', '-m', 'Boundary fixtures')
+        result = self.adopt(allow_partial=True)
+        root = self.engine.root(result['project']['id'])
+        self.assertTrue((root / 'data/source.py').exists())
+        for name in blocked + ['data/linked.py']:
+            self.assertFalse((root / name).exists(), name)
+        self.assertEqual(external.read_text(), 'external fixture')
+
     def test_invalid_page_arguments(self):
         self.put('app.py')
         pid = self.adopt()['project']['id']

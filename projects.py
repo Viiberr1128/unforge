@@ -1,5 +1,6 @@
 """Read-only folder inventory, transactional adoption, and paginated source access."""
 import hashlib
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ MAX_ENTRIES = 30000
 SKIP_DIRS = {'.git', 'node_modules', '.venv', 'venv', '__pycache__', '.next', '.nuxt',
              'dist', 'build', 'coverage', '.cache', '.idea', '.DS_Store', 'data',
              'uploads', 'backups', '.recovery'}
+AMBIGUOUS_DIRS = {'data', 'uploads', 'backups'}
 DATA_SUFFIXES = ('.sqlite', '.sqlite3', '.db', '.db-wal', '.db-shm', '.sqlite-wal',
                  '.sqlite-shm', '.log')
 
@@ -126,6 +128,8 @@ class Projects:
 
     def _scan(self, source, destination=None):
         included, skipped = [], []
+        tracked = self._tracked(source)
+        tracked_dirs = {parent.as_posix() for name in tracked for parent in Path(name).parents}
         total = entries = 0
         for parent, dirs, files in os.walk(source, topdown=True, followlinks=False):
             dirs.sort()
@@ -137,8 +141,10 @@ class Projects:
                 reason = None
                 if item.is_symlink():
                     reason = 'Symbolic links are not imported'
-                elif name in SKIP_DIRS:
+                elif name in SKIP_DIRS and not (name in AMBIGUOUS_DIRS and relative in tracked_dirs):
                     reason = ('Git storage is handled separately' if Path(parent) == source else 'Nested Git history is not imported') if name == '.git' else 'Generated files or runtime data; not application source'
+                elif any(part in AMBIGUOUS_DIRS for part in Path(relative).parts) and relative not in tracked_dirs:
+                    reason = 'Untracked runtime data; not application source'
                 else:
                     try:
                         self.engine.safe_path(source, relative)
@@ -158,6 +164,8 @@ class Projects:
                     reason = 'Generated files or runtime data; not application source'
                 elif relative.lower() == '.unforge/project.json':
                     reason = 'Project identity is created for the independent copy'
+                elif any(part in AMBIGUOUS_DIRS for part in Path(relative).parts[:-1]) and relative not in tracked:
+                    reason = 'Untracked runtime data; not application source'
                 else:
                     try:
                         self.engine.safe_path(source, relative)
@@ -193,9 +201,10 @@ class Projects:
                 retained.append(record)
         return sorted(retained, key=lambda x: x['path']), sorted(skipped, key=lambda x: x['path']), total
 
-    def _ignored(self, source, records):
-        # Evaluate ignore rules in a fresh repository: no source config or filters
-        # can execute. Copying the index makes tracked-but-ignored files remain visible.
+    @contextmanager
+    def _git_probe(self, source):
+        # Read the copied index in a fresh repository: source configuration,
+        # hooks and filters cannot execute, even when discovering tracked paths.
         with tempfile.TemporaryDirectory(prefix='unforge-ignore-') as temporary:
             probe = Path(temporary)
             self.engine.git(probe, 'init', '--template=', '-b', 'main')
@@ -211,7 +220,27 @@ class Projects:
                     (probe / '.git' / shared.name).write_bytes(data)
             if common is not None and (common / 'info/exclude').exists():
                 data, _ = _read_regular(common / 'info/exclude', 1024 * 1024)
-                (probe / '.git/info/exclude').write_bytes(data)
+                exclude = probe / '.git/info/exclude'
+                exclude.parent.mkdir(exist_ok=True)
+                exclude.write_bytes(data)
+            yield probe
+
+    def _tracked(self, source):
+        with self._git_probe(source) as probe:
+            raw = self.engine.git(probe, 'ls-files', '--cached', '-z')
+            if len(raw) > 8 * 1024 * 1024:
+                raise Problem('Git index exceeds the supported inventory limit')
+            try:
+                names = set(filter(None, raw.decode('utf-8').split('\0')))
+            except UnicodeError as error:
+                raise Problem('Git index contains unsupported file names') from error
+            if len(names) > MAX_ENTRIES:
+                raise Problem('Git index contains too many source entries')
+            return names
+
+    def _ignored(self, source, records):
+        # Copying the index makes tracked-but-ignored files remain visible.
+        with self._git_probe(source) as probe:
             for record in records:
                 if Path(record['path']).name == '.gitignore':
                     target = probe / record['path']
