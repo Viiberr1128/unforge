@@ -1,1 +1,2 @@
-https://www.unforge.app/* https://unforge.app/:splat 301
+# Domain redirects are configured at the DNS/CDN host.
+# Cloudflare Pages _redirects supports paths, not domain-level redirects.

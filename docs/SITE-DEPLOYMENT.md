@@ -16,7 +16,7 @@ Validate checksums against the release manifest and scan extracted archives, nes
 
 The public deployment uses Cloudflare Pages Direct Upload with a free DNS zone. Static requests and storage are free under the current Pages pricing; there are no Pages Functions. Account identifiers and authentication belong in private operator configuration, never this repository. Do not add a Worker, Function, paid tier, or metered service as part of a routine site update.
 
-Use your own authenticated Wrangler installation to deploy `site/`. Verify HTTPS, the www redirect, guide anchors, 404 handling, security headers, and both download checksums after deployment. The `_headers` and `_redirects` files are Cloudflare Pages configuration; other hosts need equivalent configuration.
+Use your own authenticated Wrangler installation to deploy `site/`. Verify HTTPS, the www redirect, guide anchors, 404 handling, security headers, and both download checksums after deployment. The `_headers` file is Cloudflare Pages configuration; other hosts need equivalent configuration. Domain-level redirects are not supported in Pages `_redirects`. Configure a host redirect rule matching only `www.unforge.app`, returning 301 to `concat("https://unforge.app", http.request.uri.path)` with query preservation enabled. Keep certificate-validation paths under `/.well-known/` outside this redirect so certificate renewal can complete. Both hostnames must have valid certificates, and both DNS records should be proxied when using a Cloudflare redirect rule.
 
 To preview locally, run `python3 -m http.server 4328 --bind 127.0.0.1 --directory site`. This preview does not apply Pages headers or redirects.
 
