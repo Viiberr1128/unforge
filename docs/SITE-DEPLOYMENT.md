@@ -34,6 +34,8 @@ Primary references for the current notices: [Cloudflare Privacy Policy](https://
 
 ## Optional one-time support
 
+Preserve the site's `Cache-Control: no-transform` header. Cloudflare email obfuscation otherwise rewrites support links and injects a decoding script, which this site's intentionally script-free content security policy blocks. Verify the live support address and ordinary `mailto:` links after deployment, not just the source HTML.
+
 `donate.html` offers an optional tip for the free software and documentation already provided. The app, source, and downloads remain free; a contribution grants no subscription, extra feature, priority service, or future delivery promise. It is not presented as a charitable tax deduction. Forks must replace the official project's payment link, maintainer identity, role email, and provider disclosures with their own verified arrangements, or remove the contribution flow. Never inherit another maintainer's payment destination by accident.
 
 Activate only after verifying an appropriate live Stripe account, payout ownership, account eligibility, customer-facing business identity, and a functioning private payment-support contact. Review checkout, receipts, statement descriptor, support details, and payment-policy links for unintended personal information; legally required disclosures cannot be concealed. Account identity, keys, payment records, and private operator setup belong outside the repository. The public website needs only the final verified `https://buy.stripe.com/` Payment Link, with no Stripe JavaScript, API, webhook, or server.
