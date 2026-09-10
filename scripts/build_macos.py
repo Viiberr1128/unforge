@@ -129,6 +129,8 @@ def main():
         run('npm', 'run', 'build')
     if not (ROOT / 'dist/index.html').is_file():
         parser.error('The frontend is missing; run npm run build.')
+    # Apply the same private-file envelope to native bundles, including dist.
+    run(sys.executable, '-c', 'from scripts.package_release import release_files; release_files()')
     if not BUILD_ENV.exists():
         venv.EnvBuilder(with_pip=True).create(BUILD_ENV)
     python = BUILD_ENV / 'bin/python'
