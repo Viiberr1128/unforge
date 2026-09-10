@@ -11,7 +11,7 @@ a:focus-visible{outline:3px solid var(--green);outline-offset:6px;border-radius:
 .site-header{min-height:132px;display:flex;align-items:center;justify-content:space-between;gap:32px}
 .brand{display:inline-flex;align-items:center;gap:20px;color:var(--ink);font:40px/1 var(--serif);letter-spacing:-1.7px;text-decoration:none}
 .brand svg{width:43px;height:49px}
-.nav{display:flex;gap:42px;align-items:center;font-size:20px}
+.nav{display:flex;flex-wrap:wrap;gap:16px 35px;align-items:center;font-size:20px}
 .nav a{color:var(--ink);text-decoration:none}
 .nav a:hover,.nav [aria-current=page]{text-decoration:underline}
 .hero{display:grid;grid-template-columns:1.24fr 1fr;gap:64px;padding-top:76px;padding-bottom:94px;align-items:start}
@@ -161,3 +161,12 @@ h1{letter-spacing:-3px}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}
 .button{transition:none}
 }
+
+.mission{display:grid;grid-template-columns:1fr 1fr;gap:80px;padding-top:60px;padding-bottom:60px;border-bottom:1px solid var(--line)}
+.mission h2{font-size:60px;line-height:1.12;letter-spacing:-2px;margin:0;max-width:570px}
+.mission p{font-size:21px;margin-bottom:23px}
+.mission .mission-source{margin-bottom:12px;font-size:22px}
+.mission .repo-status{font-size:16px;color:var(--muted);margin:0}
+@media(max-width:1200px){.mission{gap:45px}.mission h2{font-size:52px}}
+@media(max-width:900px){.mission{grid-template-columns:1fr;gap:25px;padding-block:42px}.mission h2{font-size:48px}.nav{gap:12px 24px}}
+@media(max-width:540px){.mission h2{font-size:42px}.mission p{font-size:19px}.mission .repo-status{font-size:15px}.mission .mission-source{font-size:20px}}
