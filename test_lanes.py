@@ -1,6 +1,8 @@
 """Worktrees, stacked merge, collision restack, checks, and observed local live ship."""
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -144,6 +146,60 @@ class LaneMergeTests(unittest.TestCase):
         self.assertEqual(
             (Path(self.temp.name) / 'live-site' / 'UNFORGE_RELEASE').read_text().strip(),
             self.engine.git(self.root, 'rev-parse', 'HEAD').decode().strip())
+
+    def test_bind_refuses_secrets_and_cloudflare_uses_the_owner_account(self):
+        calls = []
+        def runner(args, env):
+            calls.append(list(args))
+            class Result:
+                returncode = 0
+            return Result()
+        releases = Releases(self.engine, self.checks, run_command=runner)
+        with self.assertRaisesRegex(Problem, 'API tokens'):
+            releases.bind(self.pid, {
+                'id': 'web', 'type': 'cloudflare-pages', 'project': 'my-app',
+                'url': 'https://my-app.com', 'apiToken': 'cf_not_allowed',
+            })
+        releases.validate_destination({
+            'id': 'web', 'type': 'cloudflare-pages', 'project': 'my-app',
+            'url': 'https://my-app.ai', 'directory': 'dist',
+        })
+        (self.root / 'dist').mkdir()
+        (self.root / 'dist' / 'index.html').write_text('<p>app</p>\n')
+        self.engine.save(self.pid, 'Add static site')
+        tree = {'value': None}
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = tree['value'].encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *_args):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        url = f'http://127.0.0.1:{server.server_port}/'
+        releases.bind(self.pid, {
+            'id': 'web', 'type': 'cloudflare-pages', 'project': 'my-app',
+            'url': url, 'directory': 'dist',
+        })
+        self.engine.save(self.pid, 'Bind Cloudflare')
+        tree['value'] = self.engine.git(self.root, 'rev-parse', 'HEAD').decode().strip()
+        self.checks.run(self.pid)
+        receipt = releases.publish(self.pid, 'web')
+        self.assertTrue(receipt['observed'])
+        self.assertTrue(any('pages' in args and 'deploy' in args and 'my-app' in args for args in calls))
+        with self.assertRaisesRegex(Problem, 'supabase/functions'):
+            releases.bind(self.pid, {
+                'id': 'db', 'type': 'supabase-functions',
+                'projectRef': 'abcdefghijabcdefghij', 'url': url,
+            })
+            self.engine.save(self.pid, 'Bind empty supabase')
+            self.checks.run(self.pid)
+            releases.publish(self.pid, 'db')
 
 
 if __name__ == '__main__':

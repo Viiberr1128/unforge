@@ -27,7 +27,7 @@ If the built interface is absent, the first start installs pinned frontend depen
 - Run trusted static, Node, Python and Swift apps from separate saved source copies; use disposable previews or persistent managed app data.
 - Execute configured checks locally, with bounded output and process cleanup.
 - Open isolated Git worktree lanes so people and agents can commit without sharing the live checkout; restack overlapping work instead of overwriting it; merge stacked lanes onto live source.
-- Run a local check graph with result cache, then publish a checked version to a bound destination and observe that it actually serves that version. GitHub absence is computed from remotes, check receipts, and that observation — it cannot be asserted by hand.
+- Run a local check graph with result cache, then publish a checked version to a bound destination — a folder, Cloudflare Pages on YOUR account, or Supabase functions on YOUR project — and observe that the URL actually serves that version. Any domain works. GitHub absence is computed from remotes, check receipts, and that observation — it cannot be asserted by hand.
 - Create encrypted workspace recovery points in iCloud Drive, a Google Drive desktop sync folder, or another drive; verify a complete local restore before marking a copy complete.
 - Automatically back up reported changes while Unforge is open; the Mac build also watches changes from external editors.
 - Adjust text size and technical-detail preferences.

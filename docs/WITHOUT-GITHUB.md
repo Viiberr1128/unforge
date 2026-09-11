@@ -9,8 +9,9 @@ Unforge is useful when a person can make an app, save it, check it, put it live,
 3. Save a version in the lane.
 4. Run the local check graph. This is the replacement for GitHub Actions.
 5. Merge the lane onto live source. Merge refuses unless checks passed.
-6. Publish to a bound destination (a local folder or an https URL). Publishing is not done until that destination serves this version.
-7. Keep encrypted workspace recovery on storage you already own.
+6. Bind a host you already own — Cloudflare Pages, a Supabase project if the app needs one, or a local folder. Any domain works. Sign in with Wrangler or the Supabase CLI using YOUR account. Unforge does not provide a shared host.
+7. Publish. It is not done until that https URL (or folder) serves this version.
+8. Keep encrypted workspace recovery on storage you already own.
 
 `unforge.py app PROJECT` reports `githubAbsent: true` only when there is no GitHub remote, a passing Unforge check receipt exists, and a live publish was observed. Turning Actions off while a GitHub remote remains is not that gate.
 

@@ -16,6 +16,7 @@ export default function Lanes({id, dirty, onBlocked, onUpdated}) {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [editing, setEditing] = useState(false);
+  const [host, setHost] = useState({id: 'web', type: 'cloudflare-pages', project: '', url: '', directory: 'dist'});
   useLeaveGuard(editing || busy, onBlocked);
   async function refresh() {
     const [lanes, manifest, published] = await Promise.all([
@@ -74,9 +75,30 @@ export default function Lanes({id, dirty, onBlocked, onUpdated}) {
       <label>What changed?<input value={message} disabled={busy} onChange={event => setMessage(event.target.value)} placeholder="Describe the change"/></label>
       <div className="form-actions"><button disabled={busy || !path.trim()}>Write and save in this lane</button></div>
     </form>}
+    <form className="brief-form" onSubmit={event => { event.preventDefault(); run(() => api(`/projects/${id}/releases/bind`, {destination: host}), 'Destination saved. Sign in to Wrangler or the Supabase CLI with YOUR account before publishing.'); }}>
+      <h3>Your host</h3>
+      <p className="note">Unforge does not provide a shared Cloudflare or database. Connect the account you already own. Any domain works.</p>
+      <label>Kind<select value={host.type} disabled={busy} onChange={event => setHost(current => ({...current, type: event.target.value}))}>
+        <option value="cloudflare-pages">Cloudflare Pages (your account)</option>
+        <option value="supabase-functions">Supabase functions (your project)</option>
+        <option value="local">Folder on this computer</option>
+      </select></label>
+      <label>Name<input value={host.id} disabled={busy} onChange={event => setHost(current => ({...current, id: event.target.value}))} placeholder="web"/></label>
+      {host.type === 'cloudflare-pages' ? <>
+        <label>Pages project<input value={host.project} disabled={busy} onChange={event => setHost(current => ({...current, project: event.target.value}))} placeholder="my-app"/></label>
+        <label>Public URL<input value={host.url} disabled={busy} onChange={event => setHost(current => ({...current, url: event.target.value}))} placeholder="https://my-app.com"/></label>
+        <label>Static folder<input value={host.directory} disabled={busy} onChange={event => setHost(current => ({...current, directory: event.target.value}))} placeholder="dist"/></label>
+      </> : null}
+      {host.type === 'supabase-functions' ? <>
+        <label>Your project ref<input value={host.projectRef || ''} disabled={busy} onChange={event => setHost(current => ({...current, projectRef: event.target.value}))} placeholder="your 20-character ref"/></label>
+        <label>Public URL<input value={host.url} disabled={busy} onChange={event => setHost(current => ({...current, url: event.target.value}))} placeholder="https://my-app.com"/></label>
+      </> : null}
+      {host.type === 'local' ? <label>Folder<input value={host.path || ''} disabled={busy} onChange={event => setHost(current => ({...current, path: event.target.value}))} placeholder="/absolute/or/relative/folder"/></label> : null}
+      <div className="form-actions"><button disabled={busy || !host.id.trim()}>Save destination</button></div>
+    </form>
     <div className="inline-actions">
       <button className="secondary" disabled={busy} onClick={() => run(() => api(`/projects/${id}/checks`, {}), 'Checks finished. A passing receipt is required before publish.')}>Run checks</button>
-      {app.destinations?.map(item => <button key={item.id} disabled={busy} onClick={() => run(() => api(`/projects/${id}/releases/publish`, {destinationId: item.id}), `Observed ${item.id}. If this is production, confirm the live flow yourself.`)}>Publish {item.id}</button>)}
+      {app.destinations?.map(item => <button key={item.id} disabled={busy} onClick={() => run(() => api(`/projects/${id}/releases/publish`, {destinationId: item.id}), `Observed ${item.id}. Confirm the live flow yourself.`)}>Publish {item.id}</button>)}
     </div>
     {releases?.lastObserved && <p className="note">Last observed live version {releases.lastObserved.tree.slice(0, 12)} at {releases.lastObserved.observedAt}.</p>}
   </section>;

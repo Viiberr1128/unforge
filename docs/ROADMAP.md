@@ -28,7 +28,7 @@ Reviewed folder adoption, paginated source/history, durable editor drafts and pr
 
 ## Implemented: lanes, stacked merge, local Actions, observed publish
 
-Git worktree lanes, restack on overlap, stacked merge, a cached local check graph, and publish that is not complete until the bound destination serves the version are in current source. `githubAbsent` is computed. Agent proposals start in a lane and merge instead of applying a patch onto a frozen HEAD. Remaining: GitHub workflow import, a Cloudflare Workers live-ship adapter, issues, and archive of a real GitHub repo after the gate is green.
+Git worktree lanes, restack on overlap, stacked merge, a cached local check graph, and publish that is not complete until the bound destination serves the version are in current source. `githubAbsent` is computed. Agent proposals start in a lane and merge instead of applying a patch onto a frozen HEAD. Cloudflare Pages and Supabase function destinations use the owner’s signed-in CLI — any domain, no shared Unforge host. Remaining: GitHub workflow import, issues, and archive of a real GitHub repo after the gate is green.
 
 ## Next: production application proof
 

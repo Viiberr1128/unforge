@@ -687,6 +687,9 @@ class Handler(BaseHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/([a-f0-9]{32})/releases/publish', path):
                 pid = path.split('/')[3]
                 return self.send(200, self.server.releases.publish(pid, payload.get('destinationId')))
+            if re.fullmatch(r'/api/projects/([a-f0-9]{32})/releases/bind', path):
+                pid = path.split('/')[3]
+                return self.send(200, self.server.releases.bind(pid, payload.get('destination')))
             if re.fullmatch(r'/api/projects/([a-f0-9]{32})/app', path):
                 pid = path.split('/')[3]
                 return self.send(200, self.server.app_manifest.save(pid, payload.get('document'), payload.get('expectedContent', UNSET)))
