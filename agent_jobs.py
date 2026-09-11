@@ -381,6 +381,8 @@ class AgentJobs:
                     dirs.remove(name)
             for name in names:
                 path = (relative / name).as_posix()
+                if path == '.git' or path.startswith('.git/'):
+                    continue
                 target = self.engine.safe_path(root, path)
                 info = target.lstat()
                 if not stat.S_ISREG(info.st_mode):
@@ -419,14 +421,14 @@ class AgentJobs:
             self.engine.validate_checkout_size(root, base)
             self.engine.validate_tree(root, base)
             execution_lock = self._execution_lock()
+            from lanes import Lanes
+            lanes = Lanes(self.engine)
+            lane = lanes.create(pid, request_text.strip()[:80] or 'Agent change')
+            work = Path(lane['path'])
             temporary = tempfile.TemporaryDirectory(prefix='unforge-agent-')
-            work = Path(temporary.name) / 'work'
             reservation = None
             jobid = uuid.uuid4().hex
             try:
-                self.engine.git(root, 'clone', '--no-hardlinks', '--no-checkout', '--template=', '--', str(root), str(work))
-                self.engine.git(work, 'checkout', '--detach', base)
-                self.engine.git(work, 'remote', 'remove', 'origin')
                 baseline = self._snapshot(work)
                 if any(path.lower() == '.codex/config.toml' for path in baseline):
                     raise Problem('This project contains Codex runtime configuration. Remove it from the saved project before running an isolated agent.')
@@ -446,7 +448,7 @@ class AgentJobs:
                 job = dict(id=jobid, projectId=pid, request=request_text.strip(), provider='codex',
                            status='running', baseVersion=base, createdAt=now(), finishedAt=None,
                            exitCode=None, output='', outputTruncated=False, diff='', changedFiles=[],
-                           error=None, note=PROOF_NOTE, _temporary=temporary, _work=work,
+                           error=None, note=PROOF_NOTE, laneId=lane['id'], _temporary=temporary, _work=work,
                            _baseline=baseline, _bundle=bundle, _bundle_hash=bundle_hash,
                            _cancel=threading.Event(), _done=threading.Event(), _execution_lock=execution_lock)
                 if self.operations:
@@ -456,6 +458,10 @@ class AgentJobs:
                     if reservation['replayed']:
                         temporary.cleanup()
                         execution_lock.close()
+                        try:
+                            lanes.close(pid, lane['id'])
+                        except Problem:
+                            pass
                         return self._replayed(reservation)
                     job.update(operationId=operation_id, operationState='running', replayed=False)
                 self._jobs[jobid] = job
@@ -476,6 +482,10 @@ class AgentJobs:
                     try:
                         temporary.cleanup()
                     finally:
+                        try:
+                            lanes.close(pid, lane['id'])
+                        except Problem:
+                            pass
                         execution_lock.close()
                 raise
 
@@ -593,6 +603,9 @@ class AgentJobs:
                 terminal = 'cancelled'
             if terminal == 'completed':
                 self._proposal(job)
+                if job.get('laneId') and job.get('diff'):
+                    from lanes import Lanes
+                    Lanes(self.engine).save(job['projectId'], job['laneId'], 'Agent proposal')
             elif terminal == 'failed':
                 job['error'] = 'Codex exited without a successful result. Read its output for details.'
             elif terminal == 'timed_out':
@@ -716,13 +729,43 @@ class AgentJobs:
         return self.get(jobid)
 
     def apply(self, jobid):
-        with self._lock, self.engine.lock:
+        with self._lock:
             job = self._job(jobid)
             if job['status'] != 'completed':
                 raise Problem('Only a completed, unapplied proposal can be accepted.')
             if not job['diff']:
                 raise Problem('The agent did not produce source changes to apply.')
-            root = self.engine.root(job['projectId'])
+            lane_id = job.get('laneId')
+            pid = job['projectId']
+        if lane_id:
+            from checks import Checks
+            from integrate import Integrate
+            from lanes import Lanes
+            receipt = Checks(self.engine).run(pid, lane_id=lane_id)
+            if receipt.get('status') != 'passed':
+                raise Problem('Checks must pass on this lane before it can merge.')
+            with self._lock, self.engine.lock:
+                job = self._job(jobid)
+                if job['status'] != 'completed':
+                    raise Problem('Only a completed, unapplied proposal can be accepted.')
+                root = self.engine.root(pid)
+                detail = Integrate(self.engine, Lanes(self.engine)).merge(pid, lane_id)
+                record_path = self.engine.safe_path(root, '.unforge/proposals/' + jobid + '.json')
+                if not record_path.exists():
+                    record = {key: job[key] for key in ('request', 'baseVersion', 'createdAt', 'finishedAt', 'provider', 'changedFiles', 'exitCode')}
+                    record.update(schemaVersion=1, note=PROOF_NOTE, laneId=lane_id)
+                    record_path.parent.mkdir(parents=True, exist_ok=True)
+                    record_path.write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+                    self.engine.save(pid, 'Record accepted agent proposal')
+                    detail = self.engine.detail(pid)
+                job['status'] = 'applied'
+                self._persist(job)
+                return detail
+        with self._lock, self.engine.lock:
+            job = self._job(jobid)
+            if job['status'] != 'completed':
+                raise Problem('Only a completed, unapplied proposal can be accepted.')
+            root = self.engine.root(pid)
             if self.engine.git(root, 'status', '--porcelain') or self.engine.git(root, 'rev-parse', 'HEAD').decode().strip() != job['baseVersion']:
                 raise Problem('Your project changed since this proposal started. Save changes and ask the agent again.')
             for change in job['changedFiles']:

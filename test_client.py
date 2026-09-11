@@ -183,6 +183,33 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(errors, '')
         self.assertEqual(call.call_args.args[1]['operationId'], operation)
 
+    def test_cli_lanes_merge_checks_and_observed_publish(self):
+        project = self.client.call('/projects', {'name': 'Lane from CLI'})
+        pid = project['id']
+        live = self.home / 'observed-live'
+        app = {'schemaVersion': 1, 'checks': {'schemaVersion': 1, 'jobs': [{'id': 'ok', 'command': ['python3', '-c', 'print("ok")']}]},
+               'destinations': [{'id': 'live', 'type': 'local', 'path': str(live)}]}
+        source = self.home / 'app.json'
+        source.write_text(json.dumps(app))
+        self.client.call(f'/projects/{pid}/file', {'path': '.unforge/app.json', 'content': source.read_text(), 'expectedContent': None})
+        self.client.call(f'/projects/{pid}/save', {'message': 'Bind destination'})
+        code, lane, _ = self.cli('lane-open', pid, '--name', 'Add note')
+        self.assertEqual(code, 0)
+        note = self.home / 'note.txt'
+        note.write_text('from a lane\n')
+        self.assertEqual(self.cli('lane-write', pid, lane['id'], 'note.txt', '--from-file', str(note))[0], 0)
+        self.assertEqual(self.cli('lane-save', pid, lane['id'], 'Add a note')[0], 0)
+        self.assertFalse((Engine(self.home / 'projects').root(pid) / 'note.txt').exists())
+        code, merged, _ = self.cli('lane-merge', pid, lane['id'])
+        self.assertEqual(code, 0)
+        self.assertTrue(any(item['path'] == 'note.txt' for item in merged['files']) or
+                        (Engine(self.home / 'projects').root(pid) / 'note.txt').read_text() == 'from a lane\n')
+        self.assertEqual(self.cli('checks', pid)[1]['status'], 'passed')
+        code, published, _ = self.cli('publish', pid, 'live')
+        self.assertEqual(code, 0)
+        self.assertTrue(published['observed'])
+        self.assertTrue(self.cli('app', pid)[1]['githubAbsent'])
+
 
 if __name__ == '__main__':
     unittest.main()

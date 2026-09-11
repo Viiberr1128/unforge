@@ -58,6 +58,8 @@ Local restoration, macOS upload flags, same-Mac iCloud rehydration, and recovery
 
 The source and release artifacts can be distributed through GitHub, another file host, or direct transfer under the MIT license. No particular release host is required to run the app. The optional GitHub workflow runs local-equivalent checks for public repository pull requests or manual dispatch; it is skipped in private copies and does not publish or deploy anything. Uploading or publishing is not performed by the packaging script.
 
+To update the public GitHub mirror from a clean checkout of this source, run `python3 scripts/publish_public_github.py`. That push is blocked when `scripts/check_public_source.py` finds a home path, private key, or workspace project folder. It does not copy anything from a person's Unforge home directory.
+
 GitHub Pages cannot run the Python backend. Serving `dist` alone does not provide a functioning Unforge workspace. This release does not automatically provision public hosting, deploy a user's projects, or configure paid providers.
 
 Retain the alpha scope and known limitations from the README in public release descriptions. Do not present planned peer synchronization or deployment adapters as shipped features. The optional Codex adapter has fake-executable test coverage and a live disposable README-edit smoke test through apply, save, export, and ordinary Git recovery. This does not establish general AI quality or public hosting behavior. Refer to the [validation record](VALIDATION.md) and record additional evidence separately. Codex installation and account configuration are optional and are not bundled with the release.

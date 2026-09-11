@@ -26,6 +26,10 @@ These capabilities address ownership and operating surprises with evidence the a
 
 Reviewed folder adoption, paginated source/history, durable editor drafts and proposals, local trusted app/check execution, persistent managed app data, encrypted workspace recovery points, automatic change tracking, native iCloud upload metadata and opening a recovered workspace are implemented. See the completion audit for limits. Recovery points are independent full repositories, not cross-point incremental backups; local reconstruction and upload metadata are not second-device recovery evidence.
 
+## Implemented: lanes, stacked merge, local Actions, observed publish
+
+Git worktree lanes, restack on overlap, stacked merge, a cached local check graph, and publish that is not complete until the bound destination serves the version are in current source. `githubAbsent` is computed. Agent proposals start in a lane and merge instead of applying a patch onto a frozen HEAD. Remaining: GitHub workflow import, a Cloudflare Workers live-ship adapter, issues, and archive of a real GitHub repo after the gate is green.
+
 ## Next: production application proof
 
 Support narrowly defined application types with runnable previews and deterministic behavior checks. A clean build should be accompanied by proof that the intended user flow works, that data survives reopening, and that a restored copy can start. Test environments need explicit integration adapters that cannot inherit production destinations or schedules. Only claim these protections for adapters whose boundaries are implemented and tested.

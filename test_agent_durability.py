@@ -78,7 +78,7 @@ class AgentDurabilityTests(unittest.TestCase):
         before = self.finish()
         self.engine.edit(self.pid, 'README.md', 'New human decision')
         self.restart()
-        with self.assertRaisesRegex(Problem, 'project changed'):
+        with self.assertRaisesRegex(Problem, 'Save your current changes before merging'):
             self.jobs.apply(before['id'])
         self.assertEqual(self.jobs.get(before['id'])['diff'], before['diff'])
         self.assertEqual((self.engine.root(self.pid) / 'README.md').read_text(), 'New human decision')

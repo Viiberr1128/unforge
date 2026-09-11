@@ -1,6 +1,6 @@
 # Complete application ownership
 
-Product and engineering proposal, 9 September 2026. This document defines future work; it does not expand the capabilities currently implemented in Unforge 0.3. See [the current roadmap](ROADMAP.md), [Mac validation](MAC_VALIDATION.md), and [the source audit](COMPLETION-AUDIT.md) for that boundary.
+Product and engineering proposal, 9 September 2026. This document defines the GitHub-absence product. Lanes, stacked merge, the local check graph, and observed local publish are in current source; a production Cloudflare live-ship adapter and GitHub archive are not. See [the current roadmap](ROADMAP.md), [Mac validation](MAC_VALIDATION.md), and [the source audit](COMPLETION-AUDIT.md) for that boundary.
 
 **Built for humans. Operated by AI. Owned by you.**
 

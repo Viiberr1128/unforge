@@ -29,17 +29,20 @@ class Engine:
         self.home.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
 
-    def git(self, root, *args, allowed_returncodes=(0,)):
+    def git_run(self, root, *args, allowed_returncodes=(0,), timeout=30):
         env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
         env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
                    GIT_TERMINAL_PROMPT='0', GIT_ATTR_NOSYSTEM='1')
         result = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
             '-c', 'user.name=Unforge Local', '-c', 'user.email=local@unforge.invalid',
             '-c', 'core.fsync=committed', '-c', 'core.fsyncMethod=fsync',
-            '-c', 'commit.gpgsign=false', *args], cwd=root, env=env, capture_output=True, timeout=30)
+            '-c', 'commit.gpgsign=false', *args], cwd=root, env=env, capture_output=True, timeout=timeout)
         if result.returncode not in allowed_returncodes:
             raise Problem(result.stderr.decode(errors='replace').strip() or 'Git operation failed')
-        return result.stdout
+        return result
+
+    def git(self, root, *args, allowed_returncodes=(0,)):
+        return self.git_run(root, *args, allowed_returncodes=allowed_returncodes).stdout
 
     def root(self, pid):
         if not isinstance(pid, str) or not re.fullmatch(r'[a-f0-9]{32}', pid):
@@ -429,8 +432,18 @@ class Server(ThreadingHTTPServer):
             self.drafts = Drafts(engine)
             from backup_scheduler import BackupScheduler
             from workspace_watch import WorkspaceWatch
+            from lanes import Lanes
+            from integrate import Integrate
+            from checks import Checks
+            from releases import Releases
+            from app_manifest import AppManifest
             self.backup_scheduler = BackupScheduler(engine, self.backups)
             self.workspace_watch = WorkspaceWatch(engine.home, self.backup_scheduler.changed)
+            self.lanes = Lanes(engine)
+            self.checks = Checks(engine)
+            self.releases = Releases(engine, self.checks)
+            self.integrate = Integrate(engine, self.lanes)
+            self.app_manifest = AppManifest(engine, self.checks, self.releases, self.lanes)
         except Exception:
             self.server_close()
             raise
@@ -527,7 +540,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, {**self.server.backups.state(),'schedule':self.server.backup_scheduler.state(),'watcher':self.server.workspace_watch.state()})
             if path == '/api/runtime':
                 return self.send(200, self.server.runtime.overview())
-            project_tool = re.fullmatch(r'/api/projects/([a-f0-9]{32})/(files|content|adoption|runtime|drafts|draft|history)', path)
+            project_tool = re.fullmatch(r'/api/projects/([a-f0-9]{32})/(files|content|adoption|runtime|drafts|draft|history|lanes|app|releases)', path)
             if project_tool:
                 pid, action = project_tool.groups()
                 query = parse_qs(urlsplit(self.path).query)
@@ -540,8 +553,14 @@ class Handler(BaseHTTPRequestHandler):
                     cursor = int(query.get('cursor',['0'])[0]); limit = int(query.get('limit',['100'])[0])
                     versions = self.server.engine.history(self.server.engine.root(pid),cursor,limit)
                     result = {'history':versions,'nextCursor':cursor+len(versions) if len(versions)==limit else None}
+                elif action == 'lanes': result = self.server.lanes.list(pid)
+                elif action == 'app': result = self.server.app_manifest.get(pid)
+                elif action == 'releases': result = {'releases': self.server.releases.history(pid), 'lastObserved': self.server.releases.last_observed(pid)}
                 else: result = self.server.runtime.get(pid)
                 return self.send(200,result)
+            lane_get = re.fullmatch(r'/api/projects/([a-f0-9]{32})/lanes/([a-f0-9]{32})', path)
+            if lane_get:
+                return self.send(200, self.server.lanes.get(*lane_get.groups()))
             recovery_match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/recovery/([a-f0-9]{32})/download', path)
             if recovery_match:
                 name, data = self.server.recovery.download(*recovery_match.groups())
@@ -643,6 +662,34 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200,self.server.project_service.inventory(payload.get('path')))
             if path == '/api/folders/import':
                 return self.send(201,self.server.project_service.import_folder(payload.get('path'),payload.get('name'),payload.get('revision'),payload.get('allowPartial',False)))
+            if path.endswith('/lanes') and path.startswith('/api/projects/'):
+                lane_create = re.fullmatch(r'/api/projects/([a-f0-9]{32})/lanes', path)
+                if lane_create:
+                    return self.send(201, self.server.lanes.create(lane_create[1], payload.get('name'), payload.get('parent'), payload.get('claimedPaths')))
+            lane_post = re.fullmatch(r'/api/projects/([a-f0-9]{32})/lanes/([a-f0-9]{32})/(file|save|merge|restack|close)', path)
+            if lane_post:
+                pid, lid, action = lane_post.groups()
+                if action == 'file': result = self.server.lanes.write(pid, lid, payload.get('path'), payload.get('content'))
+                elif action == 'save': result = self.server.lanes.save(pid, lid, payload.get('message'))
+                elif action == 'restack': result = self.server.integrate.restack(pid, lid)
+                elif action == 'close': result = self.server.lanes.close(pid, lid)
+                else:
+                    def require_checks(tree):
+                        if self.server.checks.passed(pid, tree):
+                            return True
+                        receipt = self.server.checks.run(pid, lane_id=lid)
+                        return receipt.get('status') == 'passed'
+                    result = self.server.integrate.merge(pid, lid, require_checks=require_checks)
+                return self.send(200, result)
+            if re.fullmatch(r'/api/projects/([a-f0-9]{32})/checks', path):
+                pid = path.split('/')[3]
+                return self.send(200, self.server.checks.run(pid, lane_id=payload.get('laneId')))
+            if re.fullmatch(r'/api/projects/([a-f0-9]{32})/releases/publish', path):
+                pid = path.split('/')[3]
+                return self.send(200, self.server.releases.publish(pid, payload.get('destinationId')))
+            if re.fullmatch(r'/api/projects/([a-f0-9]{32})/app', path):
+                pid = path.split('/')[3]
+                return self.send(200, self.server.app_manifest.save(pid, payload.get('document'), payload.get('expectedContent', UNSET)))
             runtime_match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/runtime/(configure|start|check|stop|remove)',path)
             if runtime_match:
                 pid, action = runtime_match.groups()

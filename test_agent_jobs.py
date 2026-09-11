@@ -41,7 +41,9 @@ elif request == 'symlink':
 elif request == 'noop':
     print('No changes were needed')
 elif request == 'poison-git':
-    Path('.git/config').write_text('not a valid git config')
+    git = Path('.git')
+    if git.is_dir():
+        (git / 'config').write_text('not a valid git config')
     Path('README.md').write_text('Safe review clone\n')
 elif request == 'directory-to-file':
     Path('folder/note.txt').unlink()
@@ -91,8 +93,8 @@ class AgentJobsTests(unittest.TestCase):
         self.assertIn('Changed by the fake agent', job['diff'])
         self.assertEqual({item['status'] for item in job['changedFiles']}, {'added', 'modified', 'deleted'})
         detail = self.jobs.apply(job['id'])
-        self.assertTrue(detail['dirty'])
-        self.assertEqual(detail['history'], self.project['history'])
+        self.assertFalse(detail['dirty'])
+        self.assertGreater(len(detail['history']), len(self.project['history']))
         self.assertEqual((self.root / 'new file.txt').read_text(), 'New source\n')
         self.assertFalse((self.root / 'index.html').exists())
         record = json.loads((self.root / '.unforge/proposals' / (job['id'] + '.json')).read_text())
@@ -124,10 +126,10 @@ class AgentJobsTests(unittest.TestCase):
         self.engine.save(self.pid, 'Save first')
         job = self.finish(self.jobs.start(self.pid, 'change'))
         self.engine.edit(self.pid, 'README.md', 'Newer decision')
-        with self.assertRaisesRegex(Problem, 'project changed'):
+        with self.assertRaisesRegex(Problem, 'Save your current changes before merging'):
             self.jobs.apply(job['id'])
         self.engine.save(self.pid, 'Newer version')
-        with self.assertRaisesRegex(Problem, 'project changed'):
+        with self.assertRaisesRegex(Problem, 'Restack'):
             self.jobs.apply(job['id'])
         self.assertEqual((self.root / 'README.md').read_text(), 'Newer decision')
 

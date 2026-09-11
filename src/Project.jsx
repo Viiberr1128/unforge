@@ -7,6 +7,7 @@ import AgentWork from './AgentWork.jsx';
 import ProjectCare from './ProjectCare.jsx';
 import Recovery from './Recovery.jsx';
 import Runtime from './Runtime.jsx';
+import Lanes from './Lanes.jsx';
 
 export default function Project({ id, back, onUpdated, onNavigationBlocked, onOpenProject }) {
   const [project, setProject] = useState(null);
@@ -110,7 +111,7 @@ export default function Project({ id, back, onUpdated, onNavigationBlocked, onOp
   return <>
     <header className="page-top"><button className="text-button" onClick={back} disabled={draft || busy || childBlocked}><Icon name="back"/>Your projects</button><span className="local-state"><span className={`dot ${project.dirty || draft || childBlocked ? 'amber' : ''}`}/>{draft || childBlocked ? 'Work in progress in this view' : project.dirty ? 'Changes ready to save' : 'All changes saved'}</span></header>
     <section className="project-heading"><div><h1>{project.name}</h1><p>{project.description || 'A place to start something useful.'}</p></div><button onClick={() => show('save')} disabled={busy || draft || childBlocked || !project.dirty}><Icon name="check"/>Save a version</button></section>
-    <nav className="tabs" aria-label="Project views">{['Overview', 'Run & check', 'Files', 'History', 'Project care', 'Recovery', 'Dependencies', 'Take it with you'].map(label => <button key={label} disabled={busy || ((draft || childBlocked) && label !== tab)} className={tab === label ? 'active' : ''} aria-current={tab === label ? 'page' : undefined} onClick={() => {setAgentRequest(null);setTab(label); setNotice('');}}>{label}</button>)}</nav>
+    <nav className="tabs" aria-label="Project views">{['Overview', 'Lanes & ship', 'Run & check', 'Files', 'History', 'Project care', 'Recovery', 'Dependencies', 'Take it with you'].map(label => <button key={label} disabled={busy || ((draft || childBlocked) && label !== tab)} className={tab === label ? 'active' : ''} aria-current={tab === label ? 'page' : undefined} onClick={() => {setAgentRequest(null);setTab(label); setNotice('');}}>{label}</button>)}</nav>
     {error && <p role="alert" className="error">{error}</p>}{notice && <p role="status" className="notice">{notice}</p>}
     {!!storedDrafts.length && !draft && <div className="notice"><p>Saved editor drafts are available on this Mac.</p>{storedDrafts.map(item => <button className="text-button" key={item.path} disabled={busy || childBlocked} onClick={() => {setFile(item.path);setFileRefresh(value => value + 1);setTab('Files');}}>Continue {item.path}</button>)}</div>}
     {tab === 'Overview' && <div className="overview">
@@ -121,6 +122,7 @@ export default function Project({ id, back, onUpdated, onNavigationBlocked, onOp
       {requests.length > 0 && <details><summary>{requests.length} saved request{requests.length !== 1 ? 's' : ''}</summary>{requests.map(r => <article className="request" key={r.path}><small>{r.path}</small><pre>{r.content}</pre></article>)}</details>}
       <p className="note">Request files are portable handoffs. They do not start an agent automatically.</p>
     </div>}
+    {tab === 'Lanes & ship' && <Lanes id={id} dirty={project.dirty} onBlocked={setChildBlocked} onUpdated={async () => {await load();await onUpdated();}}/>}
     {tab === 'Run & check' && <Runtime id={id} dirty={project.dirty} onBlocked={setChildBlocked} onUpdated={async () => {await load();await onUpdated();}}/>}
     {tab === 'Project care' && <ProjectCare id={id} onUpdated={async () => {await load();await onUpdated();}} onBlocked={setChildBlocked} onSimplify={request => {setAgentRequest({text:request,id:crypto.randomUUID()});setTab('Overview');}}/>}
     {tab === 'Recovery' && <Recovery key={`${id}:${project.history[0]?.id}`} id={id} dirty={project.dirty} onUpdated={async () => {await load();await onUpdated();}} onBlocked={setChildBlocked} onOpenProject={onOpenProject}/>}

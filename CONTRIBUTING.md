@@ -12,6 +12,8 @@ Unforge aims to make software ownership practical for people who do not want to 
 
 A GitHub pull request is welcome when using the public mirror. A portable Git patch or bundle is also a valid change artifact; delivery depends on the communication channel available with a maintainer. Unforge does not yet implement distributed contribution exchange.
 
+The public repository is a source mirror, not a person's workspace. Do not commit home paths, credentials, databases, Unforge project IDs, or private application names. Run `python3 scripts/check_public_source.py` before sending a change. Maintainers publish a clean checkout with `python3 scripts/publish_public_github.py`.
+
 ## Design principles
 
 - Use plain language. Explain what happened and what the person can do next.

@@ -36,6 +36,12 @@ python3 unforge.py recovery-restore PROJECT_ID CAPSULE_ID
 python3 unforge.py recovery-import /absolute/path/recovery.tar.gz
 python3 unforge.py retirement PROJECT_ID
 python3 unforge.py retire PROJECT_ID CAPSULE_ID --revision CARE_REVISION --note "Recorded retained services and independent backup location"
+python3 unforge.py lanes PROJECT_ID
+python3 unforge.py lane-open PROJECT_ID --name "Fix save"
+python3 unforge.py lane-merge PROJECT_ID LANE_ID
+python3 unforge.py checks PROJECT_ID
+python3 unforge.py publish PROJECT_ID live
+python3 unforge.py app PROJECT_ID
 python3 unforge.py operations
 python3 unforge.py allowance 10 --revision SETTINGS_REVISION
 python3 unforge.py practice PROJECT_ID email --operation-id practice-note-1 --from-file practice.json
@@ -70,6 +76,13 @@ Origin: `http://127.0.0.1:4319` (or the configured local port).
 | `GET /api/projects/{id}/consequences` | — | Source-only service, dependency, and operating-work observations |
 | `GET /api/projects/{id}/simplify` | — | `{ "request", "impact" }`; generates a request without running an agent |
 | `GET /api/projects/{id}/handoff` | — | Portable Markdown notes, recorded resources, and verification limits |
+| `GET /api/projects/{id}/lanes` | — | Isolated worktree lanes |
+| `POST /api/projects/{id}/lanes` | `{ "name", "parent"? }` | Open a lane; live source stays clean |
+| `POST /api/projects/{id}/lanes/{lane}/save` | `{ "message" }` | Commit in the lane |
+| `POST /api/projects/{id}/lanes/{lane}/merge` | `{}` | Merge onto live after checks; overlapping files require restack |
+| `POST /api/projects/{id}/checks` | `{ "laneId"? }` | Run the local check graph |
+| `POST /api/projects/{id}/releases/publish` | `{ "destinationId" }` | Publish and observe the bound destination |
+| `GET /api/projects/{id}/app` | — | Computed GitHub-absence status |
 | `GET /api/projects/{id}/retirement` | — | Current resource checklist and recovery requirements |
 | `POST /api/projects/{id}/retirement` | `{ "expectedRevision", "capsuleId", "note" }` | Record a completed plan using server-verified recovery evidence |
 
