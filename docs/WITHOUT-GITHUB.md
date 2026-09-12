@@ -15,9 +15,15 @@ Unforge is useful when a person can make an app, save it, check it, put it live,
 
 `unforge.py app PROJECT` reports `githubAbsent: true` only when there is no GitHub remote, a passing Unforge check receipt exists, and a live publish was observed. Turning Actions off while a GitHub remote remains is not that gate.
 
+If the project still has GitHub Actions, use **Import GitHub Actions** then **Leave GitHub for this app**. Checkout and setup-node steps are leftovers: the files are already on the Mac. Deploy secrets belong in your own Cloudflare or database login.
+
+To send work to another person, write a change file from a lane. They need the same project history on their Mac first (export the project, or share the folder), then they import the change as a lane.
+
+A second computer is **File → Open Workspace** on a recovered folder. The iOS Simulator cannot run Unforge. On one Mac, recover a capsule into a new folder to rehearse that path.
+
 ## What GitHub is still for
 
-Finding Unforge, reading its MIT source, and sending a patch to Unforge the product. User apps do not need a GitHub account to exist, improve, or go live on a bound destination.
+Finding Unforge the product, and sending a patch *to Unforge*. User apps do not need a GitHub account.
 
 ## Updating this public mirror
 

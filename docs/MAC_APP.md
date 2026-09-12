@@ -14,9 +14,11 @@ Unzip the macOS download and drag `Unforge.app` into Applications (or your own
   has not been tested.
 - Git is a runtime prerequisite. The app checks for it and explains how to get
   Apple's command line tools if needed. An existing Git installation works too.
-- This initial build uses an **ad-hoc signature** and is **not notarized**. A
-  downloaded build may be blocked by Gatekeeper. Follow macOS's explicit Open
-  Anyway flow only for a build you trust; do not disable Gatekeeper system-wide.
+- This initial build uses an **ad-hoc signature** and is **not notarized**. First
+  open: right-click the app, choose Open, then Open again. If macOS still
+  blocks it, use System Settings → Privacy & Security → Open Anyway for this
+  build only. Do not disable Gatekeeper system-wide. Notarization remains future
+  distribution work and is not required to use a build you already trust.
 - Codex is optional. Agent work still requires your installed Codex CLI and your
   own account; the app does not include AI credits or make paid requests at launch.
 - Running a project may require its own Node, Python, or Swift tools. These are

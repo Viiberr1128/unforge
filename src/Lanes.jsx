@@ -17,6 +17,7 @@ export default function Lanes({id, dirty, onBlocked, onUpdated}) {
   const [notice, setNotice] = useState('');
   const [editing, setEditing] = useState(false);
   const [host, setHost] = useState({id: 'web', type: 'cloudflare-pages', project: '', url: '', directory: 'dist'});
+  const [handoff, setHandoff] = useState({title: '', note: '', path: '', incoming: ''});
   useLeaveGuard(editing || busy, onBlocked);
   async function refresh() {
     const [lanes, manifest, published] = await Promise.all([
@@ -75,6 +76,21 @@ export default function Lanes({id, dirty, onBlocked, onUpdated}) {
       <label>What changed?<input value={message} disabled={busy} onChange={event => setMessage(event.target.value)} placeholder="Describe the change"/></label>
       <div className="form-actions"><button disabled={busy || !path.trim()}>Write and save in this lane</button></div>
     </form>}
+    <div className="inline-actions">
+      <button className="secondary" disabled={busy} onClick={() => run(() => api(`/projects/${id}/github/import`, {}), 'GitHub run steps are now local checks. Deploy steps stay on your own host.')}>Import GitHub Actions</button>
+      <button className="secondary" disabled={busy} onClick={() => run(() => api(`/projects/${id}/github/archive`, {}), 'GitHub remotes removed and workflow files parked. Save a version.')}>Leave GitHub for this app</button>
+    </div>
+    <form className="brief-form" onSubmit={event => { event.preventDefault(); run(() => api(`/projects/${id}/exchange/export`, {laneId: selected?.id, title: handoff.title, note: handoff.note, path: handoff.path}), 'Change file written. Send it any way you send a file.'); }}>
+      <h3>Send a change</h3>
+      <p className="note">No GitHub. Save a lane, write a file, give it to a friend. They import it as a lane on their Mac.</p>
+      <label>Title<input value={handoff.title} disabled={busy} onChange={event => setHandoff(current => ({...current, title: event.target.value}))} placeholder="Fix the save button"/></label>
+      <label>Save as<input value={handoff.path} disabled={busy} onChange={event => setHandoff(current => ({...current, path: event.target.value}))} placeholder="/Users/you/Desktop/change.unforge-change"/></label>
+      <div className="form-actions"><button disabled={busy || !selected || !handoff.title.trim() || !handoff.path.trim()}>Write change file</button></div>
+    </form>
+    <form className="brief-form" onSubmit={event => { event.preventDefault(); run(() => api(`/projects/${id}/exchange/import`, {path: handoff.incoming}), 'Change imported as a lane. Review, then merge.'); }}>
+      <label>Open a change file<input value={handoff.incoming} disabled={busy} onChange={event => setHandoff(current => ({...current, incoming: event.target.value}))} placeholder="/absolute/path/to/change.unforge-change"/></label>
+      <div className="form-actions"><button disabled={busy || !handoff.incoming.trim()}>Import change</button></div>
+    </form>
     <form className="brief-form" onSubmit={event => { event.preventDefault(); run(() => api(`/projects/${id}/releases/bind`, {destination: host}), 'Destination saved. Sign in to Wrangler or the Supabase CLI with YOUR account before publishing.'); }}>
       <h3>Your host</h3>
       <p className="note">Unforge does not provide a shared Cloudflare or database. Connect the account you already own. Any domain works.</p>

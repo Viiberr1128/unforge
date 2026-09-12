@@ -45,9 +45,11 @@
 <h2>Install on Mac</h2>
 <p>Version 0.3.1 is a working alpha for Apple silicon Macs running macOS 13 or later. Git 2.30 or later is required.</p>
 <ol>
-<li>Download and open the ZIP.</li>
-<li>Move <strong>Unforge.app</strong> to Applications.</li>
-<li>Open Unforge. This build is locally signed, <strong>not notarized by Apple</strong>. If macOS blocks it, review the download, then use <strong>System Settings → Privacy &amp; Security → Open Anyway</strong> for a build you trust.</li>
+<li>Download the ZIP from this page. Optionally confirm the checksum.</li>
+<li>Move <strong>Unforge.app</strong> into Applications.</li>
+<li>First open: <strong>right-click the app → Open → Open</strong>. That is the simple Gatekeeper path. Do not turn Gatekeeper off.</li>
+<li>If macOS still blocks it, open <strong>System Settings → Privacy &amp; Security</strong> and choose <strong>Open Anyway</strong> for this build only.</li>
+<li>If Unforge says Git is missing, run <code>xcode-select --install</code> and reopen the app.</li>
 </ol>
 <div class="actions">
 <a class="button" href="/downloads/Unforge-0.3.1-macos-arm64.zip" download>Download for Mac</a>

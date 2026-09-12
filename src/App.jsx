@@ -19,6 +19,7 @@ export default function App() {
   const [importing, setImporting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [setup, setSetup] = useState(null);
   const [navigationBlocked, setNavigationBlocked] = useState(false);
   useEffect(()=>{const show=event=>setError(event.detail);window.addEventListener('unforge-backup-warning',show);return()=>window.removeEventListener('unforge-backup-warning',show);},[]);
   // Read by the native window before reload or quit.
@@ -29,7 +30,7 @@ export default function App() {
   const [options, setOptions] = useState(() => {try {const saved = JSON.parse(localStorage.getItem('unforge-display') || '{}'); return {largeText:!!saved.largeText,technical:!!saved.technical};} catch {return {largeText:false,technical:false};}});
   function updateOptions(value) {setOptions(value); try {localStorage.setItem('unforge-display',JSON.stringify(value));} catch {setError('This browser could not save your display preferences. They apply for this session.');}}
   async function refresh() { const result = await api('/projects'); setProjects(Array.isArray(result) ? result : result.projects); setProjectProblems(result.problems || []); }
-  useEffect(() => { refresh().catch(e => setError(e.message)).finally(() => setLoading(false)); }, []);
+  useEffect(() => { refresh().catch(e => setError(e.message)).finally(() => setLoading(false)); api('/setup').then(setSetup).catch(() => {}); }, []);
   function home() { setSelected(null); setView('projects'); refresh().catch(e => setError(e.message)); }
   async function create(body) { const result = await api('/projects', body); setCreating(false); setSelected(result.id); setView('projects'); refresh().catch(() => setError('Project created. The project list could not refresh yet.')); }
   async function importProject(file, capsule) { const result = await importBundle(file, capsule); setImporting(false); setSelected(result.id); setView('projects'); refresh().catch(() => setError('Project imported. The project list could not refresh yet.')); }
@@ -43,6 +44,7 @@ export default function App() {
     <main id="main" className={selected ? 'workspace' : ''}>
       {(selected || view !== 'backups') && <BackupHealth disabled={navigationBlocked || creating || importing} onOpen={() => {if (!navigationBlocked && !creating && !importing) {setSelected(null);setView('backups');}}}/>}
       {projectProblems.length > 0 && <div className="notice" role="alert"><strong>{projectProblems.length} project{projectProblems.length === 1 ? '' : 's'} need attention.</strong><p>Their folders are still here. Other projects remain available.</p><details><summary>Folders to inspect or recover</summary>{projectProblems.map(item=><p key={item.id}><code>{item.path}</code><br/>{item.error}</p>)}</details></div>}
+      {setup && setup.gitInstalled === false && <div className="error" role="alert"><strong>Git is missing.</strong><p>{setup.gitHint || 'Install Git, then reopen Unforge. Apple’s installer: xcode-select --install'}</p></div>}
       {error && <div className="error" role="alert">{error} <button className="text-button" onClick={() => {setError(''); refresh().catch(e => setError(e.message));}}>Try again</button></div>}
       {selected ? <Project key={selected} id={selected} back={home} onUpdated={refresh} onNavigationBlocked={setNavigationBlocked} onOpenProject={setSelected}/> : view === 'backups' ? <Backups back={home} onBlocked={setNavigationBlocked}/> : view === 'ownership' ? <Ownership back={home}/> : view === 'preferences' ? <Preferences options={options} update={updateOptions} back={home}/> : view === 'allowance' ? <Allowance projects={projects} back={home} onBlocked={setNavigationBlocked}/> : <Projects projects={projects} loading={loading} openProject={setSelected} openOwnership={() => setView('ownership')} create={() => setCreating(true)} importProject={() => setImporting(true)}/>}
     </main>

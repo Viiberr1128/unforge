@@ -437,6 +437,9 @@ class Server(ThreadingHTTPServer):
             from checks import Checks
             from releases import Releases
             from app_manifest import AppManifest
+            from github_import import GitHubImport
+            from exchange import Exchange
+            from second_home import SecondHome
             self.backup_scheduler = BackupScheduler(engine, self.backups)
             self.workspace_watch = WorkspaceWatch(engine.home, self.backup_scheduler.changed)
             self.lanes = Lanes(engine)
@@ -444,6 +447,9 @@ class Server(ThreadingHTTPServer):
             self.releases = Releases(engine, self.checks)
             self.integrate = Integrate(engine, self.lanes)
             self.app_manifest = AppManifest(engine, self.checks, self.releases, self.lanes)
+            self.github_import = GitHubImport(engine)
+            self.exchange = Exchange(engine, self.lanes)
+            self.second_home = SecondHome(engine)
         except Exception:
             self.server_close()
             raise
@@ -538,6 +544,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, self.server.engine.project_inventory())
             if path == '/api/backups':
                 return self.send(200, {**self.server.backups.state(),'schedule':self.server.backup_scheduler.state(),'watcher':self.server.workspace_watch.state()})
+            if path == '/api/setup':
+                git = shutil.which('git')
+                return self.send(200, {
+                    'gitInstalled': bool(git),
+                    'gitHint': None if git else 'Install Apple’s command line tools: xcode-select --install',
+                    'secondHome': self.server.second_home.explain(),
+                })
+            github_get = re.fullmatch(r'/api/projects/([a-f0-9]{32})/github', path)
+            if github_get:
+                return self.send(200, self.server.github_import.inspect(github_get[1]))
             if path == '/api/runtime':
                 return self.send(200, self.server.runtime.overview())
             project_tool = re.fullmatch(r'/api/projects/([a-f0-9]{32})/(files|content|adoption|runtime|drafts|draft|history|lanes|app|releases)', path)
@@ -690,6 +706,18 @@ class Handler(BaseHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/([a-f0-9]{32})/releases/bind', path):
                 pid = path.split('/')[3]
                 return self.send(200, self.server.releases.bind(pid, payload.get('destination')))
+            if re.fullmatch(r'/api/projects/([a-f0-9]{32})/github/import', path):
+                return self.send(200, self.server.github_import.import_workflows(path.split('/')[3]))
+            if re.fullmatch(r'/api/projects/([a-f0-9]{32})/github/archive', path):
+                return self.send(200, self.server.github_import.archive_github(path.split('/')[3]))
+            if re.fullmatch(r'/api/projects/([a-f0-9]{32})/exchange/export', path):
+                pid = path.split('/')[3]
+                return self.send(200, self.server.exchange.export_lane(
+                    pid, payload.get('laneId'), payload.get('title'), payload.get('note') or '', payload.get('path')))
+            if re.fullmatch(r'/api/projects/([a-f0-9]{32})/exchange/import', path):
+                return self.send(200, self.server.exchange.import_change(path.split('/')[3], payload.get('path')))
+            if path == '/api/second-home':
+                return self.send(200, self.server.second_home.from_capsule(payload.get('capsule'), payload.get('destination')))
             if re.fullmatch(r'/api/projects/([a-f0-9]{32})/app', path):
                 pid = path.split('/')[3]
                 return self.send(200, self.server.app_manifest.save(pid, payload.get('document'), payload.get('expectedContent', UNSET)))
