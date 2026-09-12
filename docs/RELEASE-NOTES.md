@@ -8,7 +8,7 @@ Runtime process cleanup now retries a brief macOS exit race while still refusing
 
 The website adds About, Terms of Use, Privacy Policy and Cookie Policy pages. The privacy and security notices accurately describe persistent local AI requests, output and proposals, optional providers, unencrypted working data and encrypted backups. Private vulnerability reporting is available in the official repository.
 
-This is still an alpha. The source review was bounded and is not an independent penetration test or proof that all vulnerabilities have been found. The Mac archive remains ad-hoc signed, not Developer ID signed or Apple-notarized. Trusted project execution is not a hostile-code sandbox. No account or telemetry backend is added.
+This is still an alpha. The source review was bounded and is not an independent penetration test or proof that all vulnerabilities have been found. The current Mac zip is Developer ID signed, notarized, and stapled. Trusted project execution is not a hostile-code sandbox. No account or telemetry backend is added.
 
 Validation: 296 Python tests passed, four frontend tests and the production build passed, and npm audit reported zero known vulnerabilities. The new historical-restore and process-cleanup regressions were also checked by removing the relevant guard in memory and confirming test failure. The information pages were checked at desktop and 390-pixel phone widths. These checks do not constitute an independent penetration test.
 

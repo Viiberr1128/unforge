@@ -33,4 +33,4 @@ Validated on the development Apple Silicon Mac on September 9, 2026. This is a l
 
 Packaging keeps source/runtime artifacts separate from user projects. Engine liveness uses a parent pipe; a native app crash or normal quit closes that pipe. Quitting an app attached to an independently started CLI engine does not stop that external engine. Red close preserves the window's content and engine; Quit warns about unfinished form work or session-only agent work. The active-agent warning has not been exercised with a paid model call.
 
-The app still relies on an installed Git executable. Developer ID signing, notarization, automatic updates, Intel hardware testing and older macOS runtime testing are outstanding distribution work. The source build can target Intel on an Intel build host; this delivered artifact is arm64.
+The app still relies on an installed Git executable. Automatic updates, Intel hardware testing and older macOS runtime testing remain outstanding. The 0.3.1 arm64 zip is Developer ID signed, notarized, and stapled. The source build can target Intel on an Intel build host; this delivered artifact is arm64.

@@ -28,7 +28,7 @@ Reviewed folder adoption, paginated source/history, durable editor drafts and pr
 
 ## Implemented: lanes, stacked merge, local Actions, observed publish
 
-Git worktree lanes, restack on overlap, stacked merge, a cached local check graph, and publish that is not complete until the bound destination serves the version are in current source. `githubAbsent` is computed. Agent proposals start in a lane and merge instead of applying a patch onto a frozen HEAD. Cloudflare Pages and Supabase function destinations use the owner’s signed-in CLI — any domain, no shared Unforge host. GitHub Actions `run` steps import into that check graph; leftover `uses`/secrets are explained. A change file can move a lane between Macs without GitHub. A recovered capsule can open in a new folder on this Mac (the iOS Simulator cannot run Unforge). Remaining: notarized Mac builds, and a real-app `githubAbsent` proof after the owner archives GitHub.
+Git worktree lanes, restack on overlap, stacked merge, a cached local check graph, and publish that is not complete until the bound destination serves the version are in current source. `githubAbsent` is computed. Agent proposals start in a lane and merge instead of applying a patch onto a frozen HEAD. Cloudflare Pages and Supabase function destinations use the owner’s signed-in CLI — any domain, no shared Unforge host. GitHub Actions `run` steps import into that check graph; leftover `uses`/secrets are explained. A change file can move a lane between Macs without GitHub. A recovered capsule can open in a new folder on this Mac (the iOS Simulator cannot run Unforge). Remaining: a real-app `githubAbsent` proof after the owner archives GitHub.
 
 ## Next: production application proof
 
@@ -50,4 +50,4 @@ Define portable proposal, discussion, review, and release-decision records, and 
 
 Explore constrained extension points that preserve personal presentation and workflow choices through compatible updates. Arbitrary source edits cannot be promised conflict-free upgrades. The app already lets the user choose text size and technical detail explicitly; richer adaptation should preserve that control.
 
-The native Mac shell and locally signed app packaging are implemented; Developer ID signing, notarization and automatic updates remain future distribution work. Public hosting, unattended agent scheduling, production database migration, live cloud cost auditing and peer synchronization remain unimplemented. Neither the MIT license nor local execution changes external providers' terms or makes their services free.
+The native Mac shell, Developer ID signing, and notarized arm64 packaging are implemented; automatic updates remain future distribution work. Public hosting, unattended agent scheduling, production database migration, live cloud cost auditing and peer synchronization remain unimplemented. Neither the MIT license nor local execution changes external providers' terms or makes their services free.

@@ -47,8 +47,8 @@
 <ol>
 <li>Download the ZIP from this page. Optionally confirm the checksum.</li>
 <li>Move <strong>Unforge.app</strong> into Applications.</li>
-<li>First open: <strong>right-click the app → Open → Open</strong>. That is the simple Gatekeeper path. Do not turn Gatekeeper off.</li>
-<li>If macOS still blocks it, open <strong>System Settings → Privacy &amp; Security</strong> and choose <strong>Open Anyway</strong> for this build only.</li>
+<li>Open it from Finder, Spotlight, or the Dock. This build is Developer ID signed, notarized, and stapled, so Gatekeeper should accept it.</li>
+<li>If macOS still blocks it, right-click the app, choose <strong>Open</strong>, then <strong>Open</strong> again, or use <strong>System Settings → Privacy &amp; Security → Open Anyway</strong> for this build only. Do not turn Gatekeeper off.</li>
 <li>If Unforge says Git is missing, run <code>xcode-select --install</code> and reopen the app.</li>
 </ol>
 <div class="actions">
@@ -124,14 +124,14 @@
 <pre>
 <code>shasum -a 256 Unforge-0.3.1-macos-arm64.zip</code>
 </pre>
-<p>Compare the result with the matching filename in <strong>SHA256SUMS.txt</strong>. A matching checksum checks file integrity; it does not turn an ad-hoc signature into Apple notarization.</p>
+<p>Compare the result with the matching filename in <strong>SHA256SUMS.txt</strong>. A matching checksum checks file integrity. This Mac zip is Developer ID signed, notarized, and stapled.</p>
 <h3>Update without moving your work</h3>
 <p>Make a fresh backup, quit Unforge, then replace the app bundle. Workspace files are stored separately from the application. This alpha does not install an automatic updater.</p>
 </section>
 <section id="alpha">
 <h2>What this alpha does</h2>
 <p>Unforge 0.3.1 supports local projects, named Git versions, draft recovery, optional Codex proposals, trusted local runs and checks, and encrypted workspace recovery points. A first-time user starts with an empty workspace and their own settings. Upgrading the app keeps the existing workspace outside the app bundle.</p>
-<p>It does not yet provide public deployment adapters, live provider billing controls, peer collaboration, support for every repository type, sandboxed execution of untrusted apps, or notarized desktop distribution.</p>
+<p>It does not yet provide public deployment adapters, live provider billing controls, peer collaboration, support for every repository type, or sandboxed execution of untrusted apps.</p>
 <p>Project commands run with your Mac account’s permissions and can access the network. Only run code you trust. Built-in pretend actions do not put your real app’s integrations into test mode.</p>
 <p>Unforge itself is free and MIT licensed. AI providers, production hosting, storage, and other services you connect retain their own limits and charges. Keep existing production and data recovery arrangements until your replacement workflow is verified.</p>
 <p>This website has no forms, analytics, remote fonts, or third-party scripts. The app has no Unforge login, central workspace server, or telemetry service.</p>

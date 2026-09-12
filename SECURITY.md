@@ -25,7 +25,7 @@ Only one server can hold a data directory at a time; a local lock prevents concu
 - Encrypted backups use Restic, immutable publication and content verification. Restore creates a separate workspace. Keep the passphrase separately from the device and verify recovery.
 - Release packaging refuses private-state files, untracked source, source maps and unsafe links. Public source and downloadable artifacts still require content and history review.
 
-The official public repository has dependency vulnerability alerts, secret scanning, push protection and private vulnerability reporting enabled. These are distribution protections, not dependencies of the local app. A source review and regression tests do not establish that every vulnerability has been found. The Mac release is ad-hoc signed, not Developer ID signed or notarized.
+The official public repository has dependency vulnerability alerts, secret scanning, push protection and private vulnerability reporting enabled. These are distribution protections, not dependencies of the local app. A source review and regression tests do not establish that every vulnerability has been found. The current Mac zip is Developer ID signed, notarized, and stapled. That is Gatekeeper distribution, not a security audit of the app.
 
 ## Project care and local practice
 

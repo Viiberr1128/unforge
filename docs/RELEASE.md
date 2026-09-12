@@ -44,7 +44,7 @@ After extracting the archive, run `./start.sh` or double-click `start.command` o
 
 After the checks above, run `python3 scripts/build_macos.py --skip-web-build` on a Mac. The Apple Silicon package is `artifacts/macos/Unforge-0.3.1-macos-arm64.zip`, with its checksum in `artifacts/macos/SHA256SUMS`. It targets macOS 13 or later and bundles Python, the built interface, Restic, and native workspace and iCloud helpers. Git remains a prerequisite; Node and Python are not needed to open the packaged app. Individual projects may need their own development tools.
 
-The package is ad-hoc signed and is not notarized. Local signature verification does not establish Developer ID identity or guarantee Gatekeeper acceptance on another Mac. Public distribution with that identity requires a separate signing and notarization step. See [the Mac guide](MAC_APP.md) for installation, workspace switching, runtime limits, and build details. Neither packaging script installs the app or publishes it.
+The current Mac zip is Developer ID signed, notarized, and stapled. Gatekeeper acceptance on another Mac still depends on that Mac, the ticket remaining valid, and the archive matching the published checksum. See [the Mac guide](MAC_APP.md) for installation, workspace switching, runtime limits, and build details. Neither packaging script installs the app or publishes it.
 
 ## Recovery format and validation scope
 
