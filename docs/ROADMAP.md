@@ -2,7 +2,7 @@
 
 Unforge's direction is a provider-independent home for software: understandable to beginners, operable by agents, and usable through different tools. Capabilities below are separated by what the local implementation can establish.
 
-The larger product is specified in [Complete application ownership](COMPLETION-PLAN.md), with a [source-backed completion audit](COMPLETION-AUDIT.md). That proposal defines the application lifecycle, maintained personal variants, dependency removal, portable collaboration and measurable full-use gates. The completion audit tracks the implemented source and remaining full-use gates.
+The current product shape is in [PRODUCT.md](PRODUCT.md). Remaining work below is what this implementation still does not establish.
 
 ## Implemented foundation
 

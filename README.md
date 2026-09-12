@@ -118,7 +118,7 @@ npm run check
 
 After frontend edits, run `npm run build` again before starting the built app. Run one build or test suite at a time on resource-constrained machines.
 
-Coding agents can use the [local JSON CLI and HTTP API](docs/AGENT-API.md). See [release packaging](docs/RELEASE.md) to create a distributable archive. The [validation record](docs/VALIDATION.md) describes exercised flows and remaining limits. The [product direction](docs/PRODUCT.md) and [design rationale](docs/HISTORY-INFORMED-DESIGN.md) explain the problems guiding the work.
+Coding agents can use the [local JSON CLI and HTTP API](docs/AGENT-API.md). See [release packaging](docs/RELEASE.md) to create a distributable archive. The [product direction](docs/PRODUCT.md) explains the problems guiding the work.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before contributing and [SECURITY.md](SECURITY.md) for the local trust boundary. Unforge is available under the [MIT license](LICENSE).
 
@@ -126,4 +126,4 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before contributing and [SECURITY.md](SE
 
 ![Unforge desktop workspace with three disposable example projects](docs/desktop.png)
 
-The screenshot shows real example projects created for validation. A new workspace starts empty. See the [design verification](docs/DESIGN.md) and [validation record](docs/VALIDATION.md).
+The screenshot shows real example projects created for documentation. A new workspace starts empty. See the [interface specification](docs/DESIGN.md).

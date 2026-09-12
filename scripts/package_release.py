@@ -20,7 +20,7 @@ ROOT_FILES = ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CONTRIBUTING.md
               'test_release_privacy.py', 'test_build_macos.py', 'lanes.py', 'integrate.py', 'checks.py', 'releases.py',
               'app_manifest.py', 'test_lanes.py', 'github_import.py', 'exchange.py', 'second_home.py',
               'test_github_killer.py', 'start.sh', 'start.command', 'check.sh']
-DIRECTORIES = ['src', 'public', 'docs', 'tests', 'scripts', 'dist', '.github', 'macos']
+DIRECTORIES = ['src', 'public', 'docs', 'tests', 'scripts', 'dist', 'macos']
 EXTENSIONS = {'.py', '.js', '.jsx', '.mjs', '.css', '.html', '.svg', '.png', '.md', '.txt', '.swift', '.yml', '.yaml', '.json', '.sh', '.command', '.entitlements'}
 PRIVATE_NAMES = {'auth.json', 'credentials.json', 'secrets.json', 'recovery-key', 'recovery-key.txt', 'settings.json'}
 

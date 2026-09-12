@@ -55,6 +55,6 @@ The local allowance counts attempts, not dollars or tokens, and cannot cap a pro
 
 The core has no subscription, telemetry service, or required cloud backend. Optional Codex use follows the existing account's terms and usage limits. Public app deployment, full JavaScript previews, peer synchronization, and a native installer remain outside this release.
 
-Validation: 120 integrated Python tests passed, followed by all 21 recovery tests after the final recovered-copy naming change; four JavaScript tests and the production build passed. Desktop and mobile browser workflows were exercised with isolated test data. See [VALIDATION.md](VALIDATION.md) for evidence and limits. MIT licensed. Checksums are integrity evidence, not signed publisher attestations.
+Validation: 120 integrated Python tests passed, followed by all 21 recovery tests after the final recovered-copy naming change; four JavaScript tests and the production build passed. Desktop and mobile browser workflows were exercised with isolated test data. MIT licensed. Checksums are integrity evidence, not signed publisher attestations.
 
 The built archive passed independent extraction and packaged smoke checks across all 75 manifest files. The smoke covered startup, source roundtrip, portable care, declared-data recovery, retirement recording, zero-limit refusal, and replay counted once, with Node/npm/npx and Codex blocked.
