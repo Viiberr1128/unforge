@@ -14,11 +14,13 @@ Unzip the macOS download and drag `Unforge.app` into Applications (or your own
   has not been tested.
 - Git is a runtime prerequisite. The app checks for it and explains how to get
   Apple's command line tools if needed. An existing Git installation works too.
-- This initial build uses an **ad-hoc signature** and is **not notarized**. First
-  open: right-click the app, choose Open, then Open again. If macOS still
-  blocks it, use System Settings → Privacy & Security → Open Anyway for this
-  build only. Do not disable Gatekeeper system-wide. Notarization remains future
-  distribution work and is not required to use a build you already trust.
+- A **Developer ID** build that Apple has notarized and that still has its
+  stapled ticket opens like other Mac software. An **ad-hoc** build (no
+  Developer ID identity on the build Mac, or a build made with
+  `--skip-notarize` and no notary credentials) is for a machine you already
+  trust: right-click the app, choose Open, then Open again. If macOS still
+  blocks it, use System Settings → Privacy & Security → Open Anyway for that
+  build only. Do not disable Gatekeeper system-wide.
 - Codex is optional. Agent work still requires your installed Codex CLI and your
   own account; the app does not include AI credits or make paid requests at launch.
 - Running a project may require its own Node, Python, or Swift tools. These are
@@ -132,7 +134,7 @@ global pip. It compiles the AppKit/WebKit shell, freezes the Python engine and
 web assets, compiles the iCloud upload-status, cloud-rehydration, and workspace
 change helpers, downloads checksum-pinned
 Restic and its license, creates the icon from its vector source, includes notices, signs
-the app locally, verifies that signature, and writes:
+the app, verifies that signature, and writes:
 
 ```text
 artifacts/macos/Unforge.app
@@ -150,10 +152,33 @@ dependencies come from [PyInstaller's official PyPI distribution](https://pypi.o
 The app contains the Python runtime, its standard library, PyInstaller's
 bootloader, and Restic. Their licenses and the interface notices are in
 `Contents/Resources/Licenses`. Apple frameworks and the user's Git executable
-remain system dependencies. Public distribution with a verified developer
-identity requires a separate Developer ID signing and notarization step.
-Passing local signature verification does not imply Apple notarization,
-Gatekeeper acceptance on another Mac, or App Store review.
+remain system dependencies.
+
+If the build Mac's Keychain has a **Developer ID Application** identity, the
+script signs with that identity, the hardened runtime, and a secure timestamp.
+Python's runtime needs the JIT / unsigned-executable-memory exceptions in
+`macos/Unforge.entitlements`. Override the identity with
+`UNFORGE_CODESIGN_IDENTITY` when more than one Developer ID Application
+certificate is present. Without that identity, the script still ad-hoc signs for
+local use.
+
+Notarization is optional and uses credentials that never belong in this
+repository. Create an App Store Connect API key with Notary access, keep the
+`.p8` private, and write `~/.config/unforge/apple/notary-key-meta.json`:
+
+```json
+{
+  "key_id": "KEYID",
+  "issuer_id": "00000000-0000-0000-0000-000000000000",
+  "key_path": "~/.config/unforge/apple/AuthKey.p8"
+}
+```
+
+Team keys need `issuer_id`; individual keys omit it. The script then submits
+the zip with `notarytool`, staples the ticket, and re-packs the archive. Pass
+`--skip-notarize` to stop after signing. `Contents/Resources/BUILD.json` records `signing` as
+`developer-id` or `ad-hoc`, and `notarized` after a successful staple.
+Signature verification on the build Mac is not App Store review.
 
 ## Updates and recovery
 

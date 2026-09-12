@@ -48,9 +48,101 @@ def package_app(app, archive):
                 output.writestr(info, content, compress_type=zipfile.ZIP_DEFLATED)
 
 
+MACHO_MAGICS = {
+    b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe',
+    b'\xfe\xed\xfa\xcf', b'\xfe\xed\xfa\xce',
+    b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca',
+}
+NOTARY_META = Path.home() / '.config/unforge/apple/notary-key-meta.json'
+ENTITLEMENTS = ROOT / 'macos/Unforge.entitlements'
+
+
 def run(*args, **kwargs):
     print('+ ' + ' '.join(str(arg) for arg in args), flush=True)
     return subprocess.run([str(arg) for arg in args], cwd=ROOT, check=True, **kwargs)
+
+
+def is_macho(path):
+    try:
+        with path.open('rb') as handle:
+            magic = handle.read(4)
+    except OSError:
+        return False
+    return magic in MACHO_MAGICS
+
+
+def parse_developer_id_identities(text):
+    found = []
+    for line in text.splitlines():
+        if 'Developer ID Application:' not in line:
+            continue
+        start = line.find('"')
+        end = line.rfind('"')
+        if 0 <= start < end:
+            found.append(line[start + 1:end])
+    return found
+
+
+def developer_id_identity():
+    configured = os.environ.get('UNFORGE_CODESIGN_IDENTITY', '').strip()
+    if configured:
+        return configured
+    result = subprocess.run(['security', 'find-identity', '-v', '-p', 'codesigning'],
+                            capture_output=True, text=True)
+    found = parse_developer_id_identities(result.stdout)
+    return found[0] if found else None
+
+
+def notary_credentials():
+    if not NOTARY_META.is_file():
+        return None
+    try:
+        data = json.loads(NOTARY_META.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    key_id = data.get('key_id')
+    key_path = data.get('key_path')
+    if not key_id or not key_path:
+        return None
+    path = Path(str(key_path)).expanduser()
+    if not path.is_file():
+        return None
+    return {
+        'key_id': str(key_id),
+        'issuer_id': str(data['issuer_id']) if data.get('issuer_id') else None,
+        'key_path': path,
+    }
+
+
+def sign_app(app, identity, entitlements):
+    nested = []
+    main_binary = app / 'Contents/MacOS/Unforge'
+    for path in app.rglob('*'):
+        if path.is_symlink() or not path.is_file():
+            continue
+        if path == main_binary:
+            continue
+        if is_macho(path):
+            nested.append(path)
+    nested.sort(key=lambda path: len(path.parts), reverse=True)
+    for path in nested:
+        run('codesign', '--force', '--options', 'runtime', '--timestamp',
+            '--sign', identity, path)
+    run('codesign', '--force', '--options', 'runtime', '--timestamp',
+        '--entitlements', entitlements, '--sign', identity, app)
+    run('codesign', '--verify', '--deep', '--strict', '--verbose=2', app)
+
+
+def notarize_app(app, archive, credentials):
+    command = [
+        'xcrun', 'notarytool', 'submit', archive,
+        '--key', credentials['key_path'],
+        '--key-id', credentials['key_id'],
+        '--wait', '--timeout', '15m',
+    ]
+    if credentials['issuer_id']:
+        command.extend(['--issuer', credentials['issuer_id']])
+    run(*command)
 
 
 def license_download(url, maximum=512 * 1024):
@@ -111,6 +203,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--skip-web-build', action='store_true',
                         help='Use the existing dist; run npm run check before using this option.')
+    parser.add_argument('--skip-notarize', action='store_true',
+                        help='Sign with Developer ID when available, but do not submit to Apple notary.')
     args = parser.parse_args()
     if sys.platform != 'darwin':
         parser.error('Build the macOS app on a Mac.')
@@ -206,15 +300,22 @@ def main():
         source_manifest = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(source_files)}
         source_manifest_bytes = json.dumps(source_manifest, sort_keys=True).encode()
         (resources / 'SOURCE-MANIFEST.json').write_bytes(source_manifest_bytes)
+        identity = developer_id_identity()
+        signing = 'developer-id' if identity else 'ad-hoc'
+        if identity and not ENTITLEMENTS.is_file():
+            parser.error('macos/Unforge.entitlements is required for Developer ID signing.')
         receipt = {'sourceDigest': hashlib.sha256(source_manifest_bytes).hexdigest(), 'version': version, 'architecture': architecture,
                    'minimumMacOS': '13.0', 'sourceRevision': source_revision,
                    'sourceDirty': bool(git_status.stdout) if git_status.returncode == 0 else None,
                    'python': run(python, '--version', capture_output=True, text=True).stdout.strip(),
                    'restic': RESTIC_VERSION,
-                   'signing': 'ad-hoc', 'notarized': False}
+                   'signing': signing, 'notarized': False}
         (resources / 'BUILD.json').write_text(json.dumps(receipt, indent=2) + '\n')
-        run('codesign', '--force', '--deep', '--sign', '-', app)
-        run('codesign', '--verify', '--deep', '--strict', '--verbose=2', app)
+        if identity:
+            sign_app(app, identity, ENTITLEMENTS)
+        else:
+            run('codesign', '--force', '--deep', '--sign', '-', app)
+            run('codesign', '--verify', '--deep', '--strict', '--verbose=2', app)
         output = ARTIFACTS / 'Unforge.app'
         if output.exists():
             if output.is_symlink():
@@ -225,10 +326,27 @@ def main():
     temporary_archive = archive.with_suffix('.zip.tmp')
     package_app(output, temporary_archive)
     temporary_archive.replace(archive)
+    credentials = None if args.skip_notarize or signing != 'developer-id' else notary_credentials()
+    if credentials:
+        notarize_app(output, archive, credentials)
+        receipt['notarized'] = True
+        (output / 'Contents/Resources/BUILD.json').write_text(json.dumps(receipt, indent=2) + '\n')
+        run('codesign', '--force', '--options', 'runtime', '--timestamp',
+            '--entitlements', ENTITLEMENTS, '--sign', identity, output)
+        run('codesign', '--verify', '--deep', '--strict', '--verbose=2', output)
+        run('xcrun', 'stapler', 'staple', output)
+        run('xcrun', 'stapler', 'validate', output)
+        package_app(output, temporary_archive)
+        temporary_archive.replace(archive)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     (ARTIFACTS / 'SHA256SUMS').write_text(f'{digest}  {archive.name}\n')
     print(f'\nApp: {output}\nArchive: {archive}\nSHA256: {digest}')
-    print('Ad-hoc signed for local use. Developer ID signing and notarization are not included.')
+    if signing == 'developer-id' and receipt.get('notarized'):
+        print('Developer ID signed, notarized, and stapled.')
+    elif signing == 'developer-id':
+        print('Developer ID signed with hardened runtime. Notarization skipped (no local notary credentials or --skip-notarize).')
+    else:
+        print('Ad-hoc signed for local use. Install a Developer ID Application identity to sign for Gatekeeper.')
 
 
 if __name__ == '__main__':

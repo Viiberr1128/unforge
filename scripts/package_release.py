@@ -17,11 +17,11 @@ ROOT_FILES = ['README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'CONTRIBUTING.md
               'projects.py', 'drafts.py', 'runtime.py', 'backups.py', 'backup_scheduler.py', 'workspace_watch.py', 'test_workspace_watch.py',
               'incremental_backups.py', 'test_incremental_backups.py', 'test_cloud_rehearsal.py',
               'test_projects.py', 'test_drafts.py', 'test_runtime.py', 'test_backups.py', 'test_storage_guard.py', 'test_workspace_durability.py', 'test_backup_metadata.py', 'test_backup_scheduler.py', 'test_agent_durability.py', 'test_ownership_integration.py', 'test_cloud_status.py',
-              'test_release_privacy.py', 'lanes.py', 'integrate.py', 'checks.py', 'releases.py',
+              'test_release_privacy.py', 'test_build_macos.py', 'lanes.py', 'integrate.py', 'checks.py', 'releases.py',
               'app_manifest.py', 'test_lanes.py', 'github_import.py', 'exchange.py', 'second_home.py',
               'test_github_killer.py', 'start.sh', 'start.command', 'check.sh']
 DIRECTORIES = ['src', 'public', 'docs', 'tests', 'scripts', 'dist', '.github', 'macos']
-EXTENSIONS = {'.py', '.js', '.jsx', '.mjs', '.css', '.html', '.svg', '.png', '.md', '.txt', '.swift', '.yml', '.yaml', '.json', '.sh', '.command'}
+EXTENSIONS = {'.py', '.js', '.jsx', '.mjs', '.css', '.html', '.svg', '.png', '.md', '.txt', '.swift', '.yml', '.yaml', '.json', '.sh', '.command', '.entitlements'}
 PRIVATE_NAMES = {'auth.json', 'credentials.json', 'secrets.json', 'recovery-key', 'recovery-key.txt', 'settings.json'}
 
 

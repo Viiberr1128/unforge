@@ -8,7 +8,7 @@ Unforge is an open-source **working alpha**. The current source adds folder adop
 
 ## Start locally
 
-**Mac app:** a native AppKit/WebKit application packages the interface and Python engine. Open `Unforge.app` to use your existing workspace without Terminal, Python or Node setup. It requires macOS 13+ and Git 2.30+; current builds are locally signed, not notarized. See [Mac app build and installation](docs/MAC_APP.md).
+**Mac app:** a native AppKit/WebKit application packages the interface and Python engine. Open `Unforge.app` to use your existing workspace without Terminal, Python or Node setup. It requires macOS 13+ and Git 2.30+. Source builds use a Developer ID Application identity when one is in the local Keychain, and notarize when local notary credentials are present; otherwise they stay ad-hoc. See [Mac app build and installation](docs/MAC_APP.md).
 
 **Browser/CLI version:** on macOS or Linux, a built source release needs **Python 3.10+** and **Git 2.30+**. Building from source additionally needs **Node.js 22.12+ with npm**. Download and extract an archive from [Releases](https://github.com/Viiberr1128/unforge/releases), or obtain the source, then open its folder in a terminal:
 
