@@ -5,15 +5,15 @@ Unforge is useful when a person can make an app, save it, check it, put it live,
 ## The loop
 
 1. Create a project or adopt a local folder.
-2. Describe the change. An agent works in an isolated lane, not on live source.
-3. Save a version in the lane.
-4. Run the local check graph. This is the replacement for GitHub Actions.
-5. Merge the lane onto live source. Merge refuses unless checks passed.
-6. Bind a host you already own — Cloudflare Pages, a Supabase project if the app needs one, or a local folder. Any domain works. Sign in with Wrangler or the Supabase CLI using YOUR account. Unforge does not provide a shared host.
-7. Publish. It is not done until that https URL (or folder) serves this version.
-8. Keep encrypted workspace recovery on storage you already own.
+2. Describe the change. Work happens on a copy, not the live project.
+3. Save a version on that copy.
+4. Run the project’s checks on your Mac. That is the replacement for GitHub Actions.
+5. Merge onto the live project. Unforge will not merge until checks pass.
+6. Connect a host you already own — Cloudflare Pages, a Supabase project if the app needs one, or a local folder. Any domain works. Sign in with Wrangler or the Supabase CLI using your account. Unforge does not provide a shared host.
+7. Publish. Then open the site (or folder) and make sure it’s the version you just saved.
+8. Keep encrypted backups on a drive you already own.
 
-`unforge.py app PROJECT` reports `githubAbsent: true` only when there is no GitHub remote, a passing Unforge check receipt exists, and a live publish was observed. Turning Actions off while a GitHub remote remains is not that gate.
+Unforge only treats an app as off GitHub when there is no GitHub remote, checks passed, and that live page looks right. Turning Actions off while GitHub is still the remote does not count.
 
 If the project still has GitHub Actions, use **Import GitHub Actions** then **Leave GitHub for this app**. Checkout and setup-node steps are leftovers: the files are already on the Mac. Deploy secrets belong in your own Cloudflare or database login.
 

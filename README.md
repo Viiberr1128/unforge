@@ -1,14 +1,14 @@
 # Unforge
 
-**Built for humans. Operated by AI. Owned by you.**
+**Built for humans. Owned by you.**
 
-A local home for software you own. Keep its files, history, purpose, operating decisions, and recovery material together—without a GitHub account, a hosted database, or an Unforge subscription.
+A local home for software you own. Keep its files, history, and backups together — without a GitHub account, a hosted database, or an Unforge subscription. Ask an AI to help if you want. You keep the files.
 
-Unforge is an open-source **working alpha**. The current source adds folder adoption, durable drafts and agent proposals, local app execution with persistent data, and encrypted workspace backups to storage you already own. You can record requests for any coding agent, or optionally use an existing configured Codex CLI to prepare a proposal in a separate checkout. Review and apply the proposal before saving a version.
+Unforge is an open-source **working alpha**. Start a project, save versions, run checks on your Mac, and put encrypted backups on a drive you already own. Write a request for any coding agent. Optional Codex uses your own CLI; review the change before you apply it.
 
 ## Start locally
 
-**Mac app:** a native AppKit/WebKit application packages the interface and Python engine. Open `Unforge.app` to use your existing workspace without Terminal, Python or Node setup. It requires macOS 13+ and Git 2.30+. The published arm64 zip is Developer ID signed, notarized, and stapled. Source builds on other Macs use a Developer ID Application identity when one is in the local Keychain, and notarize when local notary credentials are present; otherwise they stay ad-hoc. See [Mac app build and installation](docs/MAC_APP.md).
+**Mac app:** Open `Unforge.app` to use your workspace without Terminal, Python, or Node. It needs macOS 13+ and Git 2.30+. The download from [unforge.app](https://unforge.app) is Developer ID signed and notarized. Building from source on another Mac needs a Developer ID certificate for the same treatment. See [Mac app build and installation](docs/MAC_APP.md).
 
 **Browser/CLI version:** on macOS or Linux, a built source release needs **Python 3.10+** and **Git 2.30+**. Building from source additionally needs **Node.js 22.12+ with npm**. Download and extract an archive from [Releases](https://github.com/Viiberr1128/unforge/releases), or obtain the source, then open its folder in a terminal:
 
@@ -26,9 +26,9 @@ If the built interface is absent, the first start installs pinned frontend depen
 - Recover editor drafts and completed agent proposals after reopening Unforge.
 - Run trusted static, Node, Python and Swift apps from separate saved source copies; use disposable previews or persistent managed app data.
 - Execute configured checks locally, with bounded output and process cleanup.
-- Open isolated Git worktree lanes so people and agents can commit without sharing the live checkout; restack overlapping work instead of overwriting it; merge stacked lanes onto live source.
-- Run a local check graph with result cache, then publish a checked version to a bound destination — a folder, Cloudflare Pages on YOUR account, or Supabase functions on YOUR project — and observe that the URL actually serves that version. Any domain works. GitHub absence is computed from remotes, check receipts, and that observation — it cannot be asserted by hand.
-- Create encrypted workspace recovery points in iCloud Drive, a Google Drive desktop sync folder, or another drive; verify a complete local restore before marking a copy complete.
+- Work on a copy so the live project stays put. If two copies touch the same files, restack instead of overwriting. Merge when checks pass.
+- Run the project’s checks on your Mac. Publish to a folder, your Cloudflare Pages, or your Supabase project. After you publish, open the URL and make sure it’s the version you just saved. Unforge only treats an app as off GitHub when there’s no GitHub remote, checks passed, and that live page looks right.
+- Encrypted backups to iCloud Drive, Google Drive, or another disk. Unforge restores the backup on this Mac first, then tells you it worked.
 - Automatically back up reported changes while Unforge is open; the Mac build also watches changes from external editors.
 - Adjust text size and technical-detail preferences.
 - Read and edit small text files (up to 128 KiB each; the interface loads files and history in pages).
@@ -41,8 +41,8 @@ If the built interface is absent, the first start installs pinned frontend depen
 - Record services, estimated monthly ranges with their sources, shared dependencies, and evidence about what remains active.
 - Compare configuration consequences of a Codex proposal and prepare a behavior-preserving simplification request.
 - Record what happened when you tried a behavior in your own app, without confusing that observation with an automated test.
-- Set one daily attempt allowance across this workspace's routed Codex and practice actions; replay an operation ID without starting it twice.
-- Try built-in pretend email, payment, and webhook actions that produce local receipts without contacting a provider.
+- Cap how often Unforge starts an AI or practice job each day. That is not a dollar limit. Replay the same job ID and it will not start twice.
+- Practice buttons for fake email, payment, and webhook receipts. They don’t contact a real provider.
 - Capture saved source and explicitly declared local data, rehearse its reconstruction, and restore a separate project copy.
 - Complete a retirement plan after accounting for detected service references, shared resources, and a verified recovery capsule.
 - Record a plain-language request under `.unforge/requests/` for handoff to your preferred coding agent.
@@ -50,9 +50,9 @@ If the built interface is absent, the first start installs pinned frontend depen
 
 Saving a file and saving a version are separate steps. Save a version before exporting changes you want to preserve. Bundle upload accepts up to 20 MiB; local-path import through the CLI accepts up to 512 MiB. Imports require a supported current tree without symbolic links, submodules, or reserved files, with at most 128 MiB of file contents and 10,000 files.
 
-The dependency and consequences views use bounded source inspection. They cannot determine actual invoices, deployed settings, or data flows. Recorded monthly ranges are your estimates with provenance. An attempt allowance limits how many routed actions start, not how much a provider charges for one action or for work started elsewhere.
+The dependency and cost views look at files in the project. They cannot see real invoices or what is actually deployed. Amounts you type are your estimates. Capping how often Unforge starts a job is not a spending limit.
 
-Unforge runs in a native Mac window or local browser, backed by the same Python engine. Public deployment adapters, live provider billing controls, peer collaboration, complete support for every repository type, isolated execution of untrusted apps, and notarized desktop distribution remain on the [roadmap](docs/ROADMAP.md). Built-in practice actions demonstrate a local operation ledger; they do not sandbox your app or switch its real integrations into test mode.
+Unforge runs in a native Mac window or a local browser. It does not yet replace provider billing dashboards, team editing, every kind of repository, or a sandbox for untrusted apps. Practice buttons are fake receipts; they don’t switch your real app into a test account. See the [roadmap](docs/ROADMAP.md).
 
 ## Start with one useful project
 
@@ -71,13 +71,13 @@ Open **Backups & recovery** and choose a folder outside the active workspace. Ke
 
 Keep the recovery passphrase somewhere accessible without this Mac. **Losing both the Mac and its only copy of the passphrase makes the encrypted backups unrecoverable.** Save it in a password manager or independent safe place. A key stored in the same cloud account as the backup protects against laptop loss but does not protect the backup against compromise of that account.
 
-New recovery points share an encrypted Restic vault: unchanged file contents are stored once, and each point is checked through a complete local restore and file hashes before publication. Keep the **entire `.ufvault` folder**, including the `.ufpoint` selected for recovery. A point descriptor alone cannot restore your work. Earlier standalone `.ufbackup` copies remain recoverable. Failed or interrupted backups leave completed points intact.
+New recovery points share an encrypted vault: unchanged files are stored once. Unforge restores the point on this Mac and checks file hashes before it calls it good. Keep the **entire `.ufvault` folder**, including the `.ufpoint` you pick to recover. That small file by itself cannot restore your work. Older standalone `.ufbackup` copies still work. If a backup is interrupted, the points that already finished stay intact.
 
 Automatic backup groups changes normally no more than once every five minutes while Unforge is open. Deduplication reduces repeated content; it does not make storage unlimited. Vaults roll over after 500 snapshots or 4,000 repository entries to keep recovery inventories manageable. A new vault needs a fresh encrypted seed; earlier vaults and private generations are retained. Publication is capped at 8,000 vault entries. Metadata grows within each vault, and there is no automatic pruning. Free-space checks preserve a local reserve and refuse unsafe allocations; a cloud quota can still stop uploads. Monitor upload results and available cloud space. One Mac owns each backup writer; copying its private writer state to another active Mac is not supported collaboration.
 
 The scope is managed project files and history, written changes, drafts, proposals, operation records and managed app data. Dependency caches and runtime candidates are excluded. SQLite is copied using its online backup API; other files are checked for changes during capture. This is not a coordinated transaction across multiple databases or external services. Hosted databases, outside uploads, Git LFS payloads and external credentials need their own recovery adapters; they are not covered merely because the app source is here.
 
-“Copied locally” is different from “uploaded.” macOS iCloud metadata can report upload completion. **Test recovery from iCloud** additionally evicts the uploaded vault’s local cache, downloads it again, and verifies the decrypted recovery. This proves reconstruction after a cloud download on this Mac; it does not test account access from a second device. Google Drive needs its desktop sync folder; Unforge does not automatically connect a different Google account.
+A file sitting in iCloud or Drive on this Mac is not the same as “uploaded.” **Test recovery from iCloud** throws away the local cache, downloads the vault again, and checks you can open it. That is this Mac talking to iCloud. It does not prove you could still sign in from another computer. Google Drive uses the desktop sync folder you pick; Unforge does not log into a different Google account for you.
 
 On a replacement computer, install Unforge, download the complete `.ufvault` folder and select a `.ufpoint` inside its `points` folder (or choose an older `.ufbackup`), then use **Recover a separate copy** with your passphrase. In the Mac app, choose **File → Open Workspace…** to open the recovered folder. Nothing is executed by restoration. Reconfigure backup destinations on that computer and verify the app behavior before using it as the primary copy.
 
@@ -87,7 +87,7 @@ Use an existing installed and configured Codex CLI; no model plugin is required.
 
 One job can run at a time per operating-system user, with a 15-minute timeout and bounded output. The shared local ledger defaults to 20 attempts per UTC day and pauses a project after three consecutive failed, empty, or unknown outcomes. A lost response can be retried with the same operation ID without starting a second job. Completed proposals, logs, requests and operation records survive restart. Interrupted work is not rerun automatically. An unknown outcome must be reconciled before a fresh retry.
 
-Automated agent tests use a fake executable for controlled failure and cancellation coverage. A previous live Codex smoke test completed a specified README edit in a disposable project through apply, save, and export. This is limited integration evidence, not a general AI-quality or deployment guarantee. A successful CLI exit does not prove that tests passed or anything was deployed. See the [agent API](docs/AGENT-API.md) for limits and commands.
+Tests for the Codex path use a fake executable so failures can be checked safely. There was one live smoke test: a disposable README edit, applied, saved, and exported. That is not a claim about AI quality in general, and a green CLI exit does not mean tests passed or anything went live. See the [agent API](docs/AGENT-API.md) for limits and commands.
 
 ## Your files remain yours
 

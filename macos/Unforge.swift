@@ -122,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "Unforge", .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.1", .credits: NSAttributedString(string: "Built for humans. Operated by AI. Owned by you.\nLocal workspace · MIT open source\nYour projects stay outside the app bundle.")])
+        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "Unforge", .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.1", .credits: NSAttributedString(string: "Built for humans. Owned by you.\nLocal workspace · MIT open source\nYour projects stay outside the app bundle.")])
     }
     @objc func openWorkspace() {
         guard downloads.isEmpty else { return }

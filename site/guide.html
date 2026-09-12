@@ -47,7 +47,7 @@
 <ol>
 <li>Download the ZIP from this page. Optionally confirm the checksum.</li>
 <li>Move <strong>Unforge.app</strong> into Applications.</li>
-<li>Open it from Finder, Spotlight, or the Dock. This build is Developer ID signed, notarized, and stapled, so Gatekeeper should accept it.</li>
+<li>Open it from Finder, Spotlight, or the Dock. This build is signed and notarized, so it should open like other Mac apps.</li>
 <li>If macOS still blocks it, right-click the app, choose <strong>Open</strong>, then <strong>Open</strong> again, or use <strong>System Settings → Privacy &amp; Security → Open Anyway</strong> for this build only. Do not turn Gatekeeper off.</li>
 <li>If Unforge says Git is missing, run <code>xcode-select --install</code> and reopen the app.</li>
 </ol>
@@ -62,13 +62,13 @@
 <h2>Your first project</h2>
 <p>Start with a small project. Save a file, then <strong>Save a version</strong> to preserve that change in history.</p>
 <ol>
-<li>Create a project, copy a supported local folder, or import a supported Git bundle. Folder adoption copies into Unforge’s managed workspace and leaves the original folder in place.</li>
+<li>Create a project, copy a supported local folder, or import a supported Git bundle. If you copy a folder in, Unforge makes its own copy and leaves yours alone.</li>
 <li>In <strong>Project care → Your brief</strong>, describe what the project does and one thing that must keep working. Write the notes, then save a version.</li>
 <li>Write a request for your preferred coding agent. To use optional Codex proposals, install and sign in to your own Codex CLI first. Codex works in a separate checkout; review the changes before applying them.</li>
 <li>Run the project’s configured checks, review what changed, and save a named version. Saving a file and saving a version are separate steps.</li>
 </ol>
 <p>Your projects remain ordinary folders with Git history. You can open them with other tools and export committed history as a Git bundle. You do not need a GitHub or Unforge account.</p>
-<p class="note">AI access is optional and uses your own provider account. Unforge does not include AI credits. Its attempt allowance limits routed starts, not provider charges.</p>
+<p class="note">AI is optional and uses your own account. Unforge does not include AI credits. You can cap how often Unforge starts an AI job; that is not a spending limit. Your AI provider still bills you.</p>
 </section>
 <section id="backup">
 <h2>Back up your workspace</h2>
@@ -76,9 +76,9 @@
 <ol>
 <li>Open <strong>Backups &amp; recovery</strong>. Choose a destination outside the active workspace: iCloud Drive, a Google Drive desktop sync folder, or another drive.</li>
 <li>Save your recovery passphrase somewhere you can access without this Mac, such as a password manager. A backup cannot recover a lost passphrase.</li>
-<li>Create a recovery point. Unforge checks it through a complete local restore before reporting it as locally verified.</li>
-<li>Check upload status separately. A copy in a sync folder does not prove the upload finished. On first use, allow Unforge’s macOS iCloud Drive permission prompt.</li>
-<li>For iCloud, use <strong>Test recovery from iCloud</strong> to download the uploaded copy and verify that it can be decrypted and restored. Enable automatic backups if you want Unforge to group changes while it is open.</li>
+<li>Create a recovery point. Unforge restores it on this Mac first, then tells you it worked.</li>
+<li>Check whether the upload actually finished. A file sitting in iCloud or Drive on this Mac is not enough. The first time, allow Unforge’s iCloud Drive permission if macOS asks.</li>
+<li>For iCloud, use <strong>Test recovery from iCloud</strong> to pull the uploaded copy down and make sure you can open it. Turn on automatic backups if you want Unforge to save while the app is open.</li>
 </ol>
 <p>
 <strong>Keep the entire <code>.ufvault</code> folder.</strong> The <code>.ufpoint</code> inside it identifies a recovery point; it is not a standalone backup. Unchanged contents are shared between points. Older standalone <code>.ufbackup</code> copies remain recoverable.</p>
@@ -96,8 +96,8 @@
 <li>In the Mac app, choose <strong>File → Open Workspace…</strong> and open the recovered folder.</li>
 <li>Check your files and history. Restore any separately backed-up hosted data or credentials when needed, then test the project’s important behaviors. Reconfigure the backup destination for the recovered workspace.</li>
 </ol>
-<p>Recovery does not automatically run apps or external actions. A successful restore proves the saved files can be reconstructed; it does not prove every login or integration works. A same-Mac test also does not test your ability to sign in to the cloud account after losing the Mac.</p>
-<p class="note">Keep a copy of the installer, this guide, and your recovery passphrase accessible without the original laptop. Use one active backup writer per workspace; a synced vault is not multi-Mac collaboration.</p>
+<p>Recovery does not start your apps for you. Getting your files back is not the same as being signed in everywhere again. Trying this on the Mac you already have does not prove you could still get into iCloud if that laptop is gone.</p>
+<p class="note">Keep the installer, this guide, and your passphrase somewhere you can reach without this laptop. Don’t let two Macs write the same backup at once.</p>
 </section>
 <section id="source">
 <h2>Source &amp; requirements</h2>
@@ -132,8 +132,8 @@
 <h2>What this alpha does</h2>
 <p>Unforge 0.3.1 supports local projects, named Git versions, draft recovery, optional Codex proposals, trusted local runs and checks, and encrypted workspace recovery points. A first-time user starts with an empty workspace and their own settings. Upgrading the app keeps the existing workspace outside the app bundle.</p>
 <p>It does not yet provide public deployment adapters, live provider billing controls, peer collaboration, support for every repository type, or sandboxed execution of untrusted apps.</p>
-<p>Project commands run with your Mac account’s permissions and can access the network. Only run code you trust. Built-in pretend actions do not put your real app’s integrations into test mode.</p>
-<p>Unforge itself is free and MIT licensed. AI providers, production hosting, storage, and other services you connect retain their own limits and charges. Keep existing production and data recovery arrangements until your replacement workflow is verified.</p>
+<p>Project commands run with your Mac account’s permissions and can use the network. Only run code you trust. Practice buttons are fake receipts. They don’t switch your real app into a test account.</p>
+<p>Unforge itself is free and MIT licensed. AI, hosting, and storage you connect still have their own limits and bills. Keep your current live setup until you’ve checked that the new one actually works.</p>
 <p>This website has no forms, analytics, remote fonts, or third-party scripts. The app has no Unforge login, central workspace server, or telemetry service.</p>
 </section>
 </article>

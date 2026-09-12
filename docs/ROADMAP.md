@@ -26,9 +26,9 @@ These capabilities address ownership and operating surprises with evidence the a
 
 Reviewed folder adoption, paginated source/history, durable editor drafts and proposals, local trusted app/check execution, persistent managed app data, encrypted workspace recovery points, automatic change tracking, native iCloud upload metadata and opening a recovered workspace are implemented. See the completion audit for limits. Recovery points are independent full repositories, not cross-point incremental backups; local reconstruction and upload metadata are not second-device recovery evidence.
 
-## Implemented: lanes, stacked merge, local Actions, observed publish
+## Implemented: copies, merge, local checks, publish on your host
 
-Git worktree lanes, restack on overlap, stacked merge, a cached local check graph, and publish that is not complete until the bound destination serves the version are in current source. `githubAbsent` is computed. Agent proposals start in a lane and merge instead of applying a patch onto a frozen HEAD. Cloudflare Pages and Supabase function destinations use the owner’s signed-in CLI — any domain, no shared Unforge host. GitHub Actions `run` steps import into that check graph; leftover `uses`/secrets are explained. A change file can move a lane between Macs without GitHub. A recovered capsule can open in a new folder on this Mac (the iOS Simulator cannot run Unforge). Remaining: a real-app `githubAbsent` proof after the owner archives GitHub.
+You can work on a copy, restack when copies overlap, merge after local checks pass, and publish to a host you already own. After you publish, open the URL and check it’s this version. Unforge only treats an app as off GitHub when there is no GitHub remote, checks passed, and that live page looks right. Agent proposals start on a copy and merge instead of patching a frozen project. Cloudflare Pages and Supabase functions use your signed-in CLI — any domain, no shared Unforge host. GitHub Actions `run` steps import as local checks; leftover `uses`/secrets are explained. A change file can move work between Macs without GitHub. A recovered backup can open in a new folder on this Mac (the iOS Simulator cannot run Unforge). Remaining: a real app that has actually left GitHub.
 
 ## Next: production application proof
 

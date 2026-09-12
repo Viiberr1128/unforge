@@ -1,6 +1,6 @@
 # A useful app should not require a cloud education
 
-**Built for humans. Operated by AI. Owned by you.**
+**Built for humans. Owned by you.**
 
 Unforge aims to help people make software without inheriting a development platform they cannot understand or leave. Git provides portable source history. The product adds understandable local operations and an interface that authorized coding agents can also use.
 
