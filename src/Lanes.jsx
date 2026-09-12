@@ -43,11 +43,11 @@ export default function Lanes({id, dirty, onBlocked, onUpdated}) {
   if (!state || !app) return <p role={error ? 'alert' : 'status'}>{error || 'Opening lanes…'}</p>;
   const open = state.lanes.filter(item => item.status !== 'closed');
   return <section className="project-care">
-    <div className="section-heading"><div><h2>Lanes, merge, and live ship.</h2><p>Each lane is its own Git worktree. Merge lands on live source. Publishing is not done until the bound site serves that version.</p></div></div>
+    <div className="section-heading"><div><h2>Replace GitHub for this app.</h2><p>Work on a copy. Checks run on this Mac. Merge when they pass. Publish to a host you own. Send a file instead of a pull request.</p></div></div>
     {error && <p role="alert" className="error">{error}</p>}
     {notice && <p role="status" className="notice">{notice}</p>}
     <div className={app.githubAbsent ? 'notice' : 'error'} role="status">
-      <strong>{app.githubAbsent ? 'This app can work without GitHub.' : 'GitHub is still required for this app.'}</strong>
+      <strong>{app.githubAbsent ? 'This app does not need GitHub.' : 'This app still uses GitHub.'}</strong>
       {app.blockers.map(item => <p key={item}>{item}</p>)}
     </div>
     {dirty && <p className="notice">Save the live version before opening or merging a lane.</p>}

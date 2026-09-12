@@ -1,6 +1,6 @@
 # Work without GitHub
 
-Unforge is useful when a person can make an app, save it, check it, put it live, and get it back — without opening github.com. The public GitHub repository is only a distribution mirror for Unforge itself.
+Unforge is useful when a person can make an app, save it, check it, put it live, and get it back — without opening github.com. Get Unforge from unforge.app. The public GitHub repository is a copy of the source, not the storefront.
 
 ## The loop
 
@@ -23,7 +23,7 @@ A second computer is **File → Open Workspace** on a recovered folder. The iOS 
 
 ## What GitHub is still for
 
-Finding Unforge the product, and sending a patch *to Unforge*. User apps do not need a GitHub account.
+Inspecting Unforge the product, if you want. User apps do not need a GitHub account. Patches to Unforge can go to support@unforge.app as a bundle or a change file.
 
 ## Updating this public mirror
 

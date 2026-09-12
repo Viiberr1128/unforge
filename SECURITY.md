@@ -39,7 +39,7 @@ The durable SQLite operation ledger binds IDs to a project, kind, and payload ha
 
 For a non-sensitive bug, provide a minimal reproduction using a disposable project. Include the operating system, Python and Git versions, and expected versus actual behavior.
 
-Report vulnerabilities through [GitHub private vulnerability reporting](https://github.com/Viiberr1128/unforge/security/advisories/new), enabled for the official repository. Do not put working exploits, credentials, private project contents, or personal data into a public issue. Share a minimal disposable reproduction privately. Fork maintainers should enable their own private reporting channel.
+Report vulnerabilities to [support@unforge.app](mailto:support@unforge.app). Do not put working exploits, credentials, private project contents, or personal data in a public place. Share a minimal disposable reproduction privately. An optional [GitHub advisory form](https://github.com/Viiberr1128/unforge/security/advisories/new) exists on the public source copy. Fork maintainers should publish their own private reporting address.
 
 There is no published security support SLA. Review fixes and release notes before upgrading; this alpha has not undergone an independent security audit.
 

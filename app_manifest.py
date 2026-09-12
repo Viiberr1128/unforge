@@ -17,15 +17,15 @@ class AppManifest:
         blockers = []
         remotes = self.engine.git(root, 'remote', '-v', allowed_returncodes=(0, 128)).decode(errors='replace')
         if 'github.com' in remotes.lower():
-            blockers.append('A GitHub remote is still configured. Remove it after Unforge owns checks, merge, and live ship.')
+            blockers.append('A GitHub remote is still configured. Import Actions if you need them, then leave GitHub for this app.')
         workflows = list((root / '.github' / 'workflows').glob('*.yml')) + list((root / '.github' / 'workflows').glob('*.yaml'))
         if workflows:
-            blockers.append('GitHub workflow files are still the recorded check path. Import them into the Unforge check graph.')
+            blockers.append('GitHub workflow files are still here. Import GitHub Actions to turn run steps into local checks.')
         tree = self.engine.git(root, 'rev-parse', 'HEAD').decode().strip()
         if self.checks and not self.checks.passed(pid, tree):
-            blockers.append('No passing Unforge check receipt exists for the current version.')
+            blockers.append('This version has not passed Unforge checks yet.')
         if self.releases and not self.releases.last_observed(pid):
-            blockers.append('No observed live publish exists. Merge is not done until the bound site serves this version.')
+            blockers.append('After you publish, open the live site and make sure it is this version.')
         document = {}
         path = root / '.unforge' / 'app.json'
         if path.is_file():
@@ -37,7 +37,7 @@ class AppManifest:
                 blockers.append('App settings could not be read.')
         if document.get('githubAbsent') is True:
             # A stored true is never trusted; only computed absence counts.
-            blockers.append('githubAbsent cannot be asserted in app.json; Unforge computes it from remotes, checks, and live receipts.')
+            blockers.append('You cannot mark GitHub gone by hand. Unforge looks at remotes, checks, and the live site.')
         status = dict(schemaVersion=1, githubAbsent=not blockers, blockers=blockers,
                       destinations=document.get('destinations') or [],
                       checks=document.get('checks'),
@@ -48,7 +48,7 @@ class AppManifest:
         if not isinstance(document, dict):
             raise Problem('App settings must be an object')
         if document.get('githubAbsent') is True:
-            raise Problem('GitHub absence is computed after checks and an observed live publish. It cannot be set by hand.')
+            raise Problem('You cannot mark GitHub gone by hand. Unforge looks at remotes, checks, and the live site.')
         payload = dict(document)
         payload.pop('githubAbsent', None)
         payload['schemaVersion'] = 1

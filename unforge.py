@@ -140,7 +140,7 @@ def main():
     lane_restack = commands.add_parser('lane-restack', help='Replay a lane onto current live source after a parent lands')
     lane_restack.add_argument('project')
     lane_restack.add_argument('lane')
-    checks = commands.add_parser('checks', help='Run the local check graph; this replaces GitHub Actions for the app')
+    checks = commands.add_parser('checks', help='Run local checks. This replaces GitHub Actions for the app')
     checks.add_argument('project')
     checks.add_argument('--lane')
     publish = commands.add_parser('publish', help='Publish a checked version and observe the bound destination')

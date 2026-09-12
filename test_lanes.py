@@ -116,8 +116,8 @@ class LaneMergeTests(unittest.TestCase):
     def test_github_absence_is_computed_and_cannot_be_asserted(self):
         status = self.manifest.get(self.pid)
         self.assertFalse(status['githubAbsent'])
-        self.assertTrue(any('live publish' in item or 'check receipt' in item for item in status['blockers']))
-        with self.assertRaisesRegex(Problem, 'cannot be set by hand'):
+        self.assertTrue(any('live site' in item or 'passed Unforge checks' in item for item in status['blockers']))
+        with self.assertRaisesRegex(Problem, 'cannot mark GitHub gone by hand'):
             self.manifest.save(self.pid, {'schemaVersion': 1, 'githubAbsent': True})
         self.checks.run(self.pid)
         self.releases.publish(self.pid, 'live')

@@ -8,9 +8,11 @@ Unforge is an open-source **working alpha**. Start a project, save versions, run
 
 ## Start locally
 
-**Mac app:** Open `Unforge.app` to use your workspace without Terminal, Python, or Node. It needs macOS 13+ and Git 2.30+. The download from [unforge.app](https://unforge.app) is Developer ID signed and notarized. Building from source on another Mac needs a Developer ID certificate for the same treatment. See [Mac app build and installation](docs/MAC_APP.md).
+Get Unforge from [unforge.app](https://unforge.app). You do not need a GitHub account.
 
-**Browser/CLI version:** on macOS or Linux, a built source release needs **Python 3.10+** and **Git 2.30+**. Building from source additionally needs **Node.js 22.12+ with npm**. Download and extract an archive from [Releases](https://github.com/Viiberr1128/unforge/releases), or obtain the source, then open its folder in a terminal:
+**Mac app:** Open `Unforge.app` to use your workspace without Terminal, Python, or Node. It needs macOS 13+ and Git 2.30+. The download from unforge.app is Developer ID signed and notarized. Building from source on another Mac needs a Developer ID certificate for the same treatment. See [Mac app build and installation](docs/MAC_APP.md).
+
+**Browser/CLI version:** on macOS or Linux, a built source release needs **Python 3.10+** and **Git 2.30+**. Building from source additionally needs **Node.js 22.12+ with npm**. Download the source archive from [unforge.app](https://unforge.app/guide.html#source), then open its folder in a terminal:
 
 ```sh
 ./start.sh
@@ -99,7 +101,7 @@ Projects are stored under `~/.local/share/unforge` by default. Set `UNFORGE_HOME
 UNFORGE_HOME="$HOME/My Unforge Data" ./start.sh
 ```
 
-The projects contain normal Git repositories. You can work on them with Git directly and leave Unforge without a conversion service. GitHub can distribute this source or serve as a remote you choose; it is not required to run Unforge.
+The projects contain normal Git repositories. You can work on them with Git directly and leave Unforge without a conversion service. Unforge itself is distributed from [unforge.app](https://unforge.app). This GitHub repository is a public copy of the source. Your apps do not need a GitHub remote.
 
 A Git bundle preserves committed source history. A recovery capsule adds the local files, folders, and SQLite databases you explicitly declare. Neither automatically discovers hosted databases, uploads kept elsewhere, credentials, or Git LFS objects. Restore creates local files; it cannot undo external effects such as messages already sent. See [ownership and recovery](docs/OWNERSHIP.md).
 
