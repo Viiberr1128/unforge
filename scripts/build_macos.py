@@ -138,7 +138,7 @@ def notarize_app(app, archive, credentials):
         'xcrun', 'notarytool', 'submit', archive,
         '--key', credentials['key_path'],
         '--key-id', credentials['key_id'],
-        '--wait', '--timeout', '15m',
+        '--wait', '--timeout', '30m',
     ]
     if credentials['issuer_id']:
         command.extend(['--issuer', credentials['issuer_id']])
@@ -304,12 +304,13 @@ def main():
         signing = 'developer-id' if identity else 'ad-hoc'
         if identity and not ENTITLEMENTS.is_file():
             parser.error('macos/Unforge.entitlements is required for Developer ID signing.')
+        credentials = None if args.skip_notarize or signing != 'developer-id' else notary_credentials()
         receipt = {'sourceDigest': hashlib.sha256(source_manifest_bytes).hexdigest(), 'version': version, 'architecture': architecture,
                    'minimumMacOS': '13.0', 'sourceRevision': source_revision,
                    'sourceDirty': bool(git_status.stdout) if git_status.returncode == 0 else None,
                    'python': run(python, '--version', capture_output=True, text=True).stdout.strip(),
                    'restic': RESTIC_VERSION,
-                   'signing': signing, 'notarized': False}
+                   'signing': signing, 'notarized': bool(credentials)}
         (resources / 'BUILD.json').write_text(json.dumps(receipt, indent=2) + '\n')
         if identity:
             sign_app(app, identity, ENTITLEMENTS)
@@ -326,16 +327,11 @@ def main():
     temporary_archive = archive.with_suffix('.zip.tmp')
     package_app(output, temporary_archive)
     temporary_archive.replace(archive)
-    credentials = None if args.skip_notarize or signing != 'developer-id' else notary_credentials()
     if credentials:
         notarize_app(output, archive, credentials)
-        receipt['notarized'] = True
-        (output / 'Contents/Resources/BUILD.json').write_text(json.dumps(receipt, indent=2) + '\n')
-        run('codesign', '--force', '--options', 'runtime', '--timestamp',
-            '--entitlements', ENTITLEMENTS, '--sign', identity, output)
-        run('codesign', '--verify', '--deep', '--strict', '--verbose=2', output)
         run('xcrun', 'stapler', 'staple', output)
         run('xcrun', 'stapler', 'validate', output)
+        receipt['notarized'] = True
         package_app(output, temporary_archive)
         temporary_archive.replace(archive)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
