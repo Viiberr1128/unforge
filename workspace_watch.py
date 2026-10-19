@@ -71,7 +71,14 @@ class WorkspaceWatch:
                         with self._lock: self._status = 'watching'
                         self._ready.set()
                     elif line == b'changed' and self._ready.is_set():
-                        self.on_changed()
+                        try:
+                            self.on_changed()
+                            with self._lock: self._error = None
+                        except (OSError, ValueError) as error:
+                            # A disk-full schedule write must not permanently
+                            # kill external-edit observation. The scheduler keeps
+                            # its pending generation and exposes persistence state.
+                            with self._lock: self._error = 'A change was observed, but backup tracking could not be saved: ' + str(error)[:300]
                         with self._lock: self._changes += 1
                     else:
                         raise ValueError('Invalid watcher protocol')

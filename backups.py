@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import tarfile
 import uuid
 
 from engine import Problem
@@ -31,8 +32,36 @@ MAX_BYTES = 50 * 1024**3
 MIN_STORAGE_RESERVE = 1024**3
 MAX_STORAGE_RESERVE = 10 * 1024**3
 STORAGE_METADATA_ALLOWANCE = 16 * 1024**2
+RETENTION_REVIEW_TTL_SECONDS = 30
 EXCLUDED = {'.backups', '.runtime', 'node_modules', '.venv', '.venv-macos', '__pycache__',
             '.DS_Store', '.server.lock', 'operation-owners'}
+
+
+def clone_file(source, destination):
+    """APFS copy-on-write capture; never a hard link to mutable user content."""
+    if sys.platform != 'darwin': return False
+    import ctypes
+    library = ctypes.CDLL(None, use_errno=True)
+    clone = getattr(library, 'clonefile', None)
+    if clone is None: return False
+    clone.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int)
+    clone.restype = ctypes.c_int
+    if clone(os.fsencode(source), os.fsencode(destination), 1) == 0:  # CLONE_NOFOLLOW
+        if destination.is_symlink():
+            destination.unlink()
+            raise Problem('A capture source changed into a symbolic link.')
+        return True
+    import errno
+    code = ctypes.get_errno()
+    if code in (errno.EXDEV, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS, errno.EINVAL): return False
+    raise OSError(code, os.strerror(code), str(source))
+
+
+def clone_capture_available(source, target):
+    if sys.platform != 'darwin' or source.stat().st_dev != target.stat().st_dev: return False
+    with tempfile.TemporaryDirectory(prefix='clone-probe-', dir=target) as temporary:
+        original = Path(temporary) / 'source'; original.write_bytes(b'capture capability')
+        return clone_file(original, Path(temporary) / 'copy')
 
 
 def stamp():
@@ -73,7 +102,9 @@ def storage_guard(requirements):
             raise Problem(f'Not enough free disk space at {volume["path"]}: '
                           f'{needed/gib:.2f} GiB needed including a {volume["reserveBytes"]/gib:.2f} GiB safety reserve; '
                           f'{volume["freeBytes"]/gib:.2f} GiB available. '
-                          'Free space or choose another destination. Existing backups are unchanged; Unforge does not automatically prune them.')
+                          'Free space on this volume or relocate the storage used for this phase. '
+                          'Changing only the backup destination does not relocate private capture or writer storage. '
+                          'Existing backups are unchanged; Unforge does not automatically prune them.')
     return list(volumes.values())
 
 
@@ -86,9 +117,14 @@ def estimated_workspace_storage(listing):
     return sum(max(4096, ((info[2] + 4095) // 4096) * 4096) + 512 for info in listing.values()) + STORAGE_METADATA_ALLOWANCE
 
 
+def fail_backup_walk(error):
+    """A skipped subtree cannot establish complete capture or verification."""
+    raise Problem('Cannot completely read backup directory: ' + str(error.filename or 'unknown folder')) from error
+
+
 def tree_storage(path):
     size = 0
-    for parent, dirs, files in os.walk(path, followlinks=False):
+    for parent, dirs, files in os.walk(path, followlinks=False, onerror=fail_backup_walk):
         size += 4096 * (1 + len(dirs))
         for name in files:
             source = Path(parent) / name
@@ -158,7 +194,7 @@ def sync_tree(path):
     path = Path(path)
     real_directory(path)
     directories = []
-    for parent, dirs, files in os.walk(path, followlinks=False):
+    for parent, dirs, files in os.walk(path, followlinks=False, onerror=fail_backup_walk):
         directories.append(Path(parent))
         for name in dirs:
             if (Path(parent) / name).is_symlink(): raise Problem('Backup directory links are not allowed.')
@@ -240,6 +276,61 @@ class Backups:
         self.closed = threading.Event()
         self.children = set()
         self.children_lock = threading.Lock()
+        self.on_changed = None
+        self._retention_lock = threading.Lock()
+        self._retention_cache = None
+        self._retention_expires = 0
+        self._retention_scanning = False
+        self._retention_revision = 0
+
+    def _operation_active(self):
+        if self.worker and self.worker.is_alive(): return True
+        with self.children_lock: return bool(self.children)
+
+    def _retention_busy(self):
+        return self.closed.is_set() or self._operation_active()
+
+    def _retention_state(self):
+        """Advisory metadata, bounded in frequency and independent of recovery proof."""
+        now = time.monotonic()
+        with self._retention_lock:
+            busy = self._retention_busy()
+            fresh = self._retention_cache is not None and now < self._retention_expires
+            if busy or self._retention_scanning or fresh:
+                value = copy.deepcopy(self._retention_cache) if self._retention_cache is not None else {
+                    'automaticPruning':False, 'generations':[], 'checkedAt':None,
+                    'scope':'Private generation storage has not yet been inventoried. This is not recovery verification.'}
+                value['cacheStatus'] = ('current' if fresh and value.get('checkedAt') and not value.get('error') and not busy and not self._retention_scanning
+                                        else 'stale' if value.get('checkedAt') else 'not-yet-available')
+                value['refreshDeferred'] = busy
+                value['refreshPending'] = self._retention_scanning
+                return value
+            self._retention_scanning = True
+            revision = self._retention_revision
+        value = None
+        try:
+            from incremental_backups import IncrementalBackups
+            review = IncrementalBackups.retention_review(self, should_stop=self._retention_busy)
+            value = {**review, 'checkedAt':stamp()}
+        except (OSError, ValueError, TypeError):
+            with self._retention_lock:
+                value = copy.deepcopy(self._retention_cache) if self._retention_cache is not None else {
+                    'automaticPruning':False, 'generations':[], 'checkedAt':None}
+            if not self._retention_busy():
+                value['error'] = 'Private generation inventory needs review; no data was changed.'
+        finally:
+            with self._retention_lock:
+                self._retention_scanning = False
+                if value is not None:
+                    # A terminal receipt or a writer starting mid-scan makes
+                    # this historical. The next idle read must refresh it.
+                    deferred = self._retention_busy() or revision != self._retention_revision
+                    self._retention_cache = copy.deepcopy(value)
+                    self._retention_expires = 0 if deferred else time.monotonic() + RETENTION_REVIEW_TTL_SECONDS
+                    result = {**value, 'cacheStatus':'current' if value.get('checkedAt') and not deferred and not value.get('error')
+                              else 'stale' if value.get('checkedAt') else 'not-yet-available',
+                              'refreshDeferred':deferred, 'refreshPending':False}
+        return result
 
     def settings(self):
         if not self.config_path.exists() and not self.config_path.is_symlink():
@@ -267,7 +358,9 @@ class Backups:
             for field in ('updatedAt', 'encryption'):
                 if field in value and not isinstance(value[field], str): raise Problem('Invalid backup setting.')
             if 'automatic' in value and type(value['automatic']) is not bool: raise Problem('Invalid backup preference.')
-            return {key: value[key] for key in ('configured', 'destinations', 'updatedAt', 'encryption', 'automatic') if key in value}
+            # Scheduling has its own durable state; the obsolete preference must
+            # not contradict schedule.enabled in the API.
+            return {key: value[key] for key in ('configured', 'destinations', 'updatedAt', 'encryption') if key in value}
         except (ValueError, TypeError, OSError, RecursionError) as error:
             raise Problem('Backup destination settings cannot be read. Save a destination to repair them. The original settings and existing recovery key will be preserved.') from error
 
@@ -291,16 +384,20 @@ class Backups:
             for path in cloud.iterdir():
                 if path.name.startswith('GoogleDrive-') and (path / 'My Drive').is_dir():
                     suggestions.append({'kind':'drive', 'name':'Google Drive', 'path':str(path / 'My Drive/Unforge Backups')})
+        retention = self._retention_state()
+        with self.lock:
+            jobs = copy.deepcopy(list(self.jobs.values()))
         return {**value, 'available':bool(self.executable), 'suggestions':suggestions,
                 'cloudRehearsalAvailable':bool(cloud_helper('unforge-cloud-rehydrate')),
-                'jobs':sorted(self.jobs.values(), key=lambda x:x.get('createdAt', ''), reverse=True)[:100],
+                'jobs':sorted(jobs, key=lambda x:x.get('createdAt', ''), reverse=True)[:100],
                 'historyErrors':list(self.history_errors), 'keyConfigured':key_configured,
+                'retentionReview':retention,
                 'scope':'Managed workspace source, local data, saved drafts and proposals. External databases, original folders and external credentials require their own backup bindings.',
                 'cloudNotice':'A sync-folder copy remains upload pending until cloud receipt is verified. Keep your recovery key somewhere you can reach without this Mac.'}
 
     def configure(self, destinations, password=None):
         with self.lock:
-            if self.worker and self.worker.is_alive(): raise Problem('Wait for the current backup operation.')
+            if self._operation_active(): raise Problem('Wait for the current backup operation.')
             if not self.executable: raise Problem('The restic backup tool is missing from this installation.')
             if not isinstance(destinations, list) or not 1 <= len(destinations) <= 4: raise Problem('Choose one to four backup destinations.')
             cleaned = []
@@ -329,7 +426,7 @@ class Backups:
             for d in cleaned:
                 Path(d['path']).mkdir(parents=True, exist_ok=True)
                 real_directory(Path(d['path']))
-            result = {'configured':True, 'destinations':cleaned, 'updatedAt':stamp(), 'encryption':'restic repository v2', 'automatic':False}
+            result = {'configured':True, 'destinations':cleaned, 'updatedAt':stamp(), 'encryption':'restic repository v2'}
             repair = False
             try: self.settings()
             except (ValueError, TypeError, OSError): repair = True
@@ -341,6 +438,35 @@ class Backups:
                 sync_directory(self.root)
             atomic(self.config_path,result)
             return self.state()
+
+    @staticmethod
+    def _stop_owned_child(process, sig=signal.SIGKILL, *, reap=True):
+        """Stop the owned session group, even after its direct child exits."""
+        def send():
+            for attempt in range(5):
+                process.poll()
+                try:
+                    os.killpg(process.pid, sig)
+                    return True
+                except ProcessLookupError:
+                    return False
+                except PermissionError:
+                    if process.poll() is not None:
+                        inspection = subprocess.run(['ps', '-o', 'stat=', '-g', str(process.pid)],
+                            capture_output=True, text=True, timeout=1)
+                        if inspection.returncode not in (0, 1) or inspection.stderr.strip(): raise
+                        if all(state.startswith('Z') for state in inspection.stdout.split()): return False
+                    if attempt == 4: raise
+                    time.sleep(.02)
+        try:
+            if getattr(process, '_unforge_group_stopped', False) is not True:
+                process._unforge_group_stopped = False
+                sent = send()
+                # A sent TERM does not establish that descendants have stopped.
+                # KILL or an empty/zombie-only group permits final cleanup.
+                process._unforge_group_stopped = not sent or sig == signal.SIGKILL
+        finally:
+            if reap: process.wait(timeout=10)
 
     def _command(self, repository, key, *args, cwd=None):
         if not self.executable: raise Problem('Install the bundled restic backup tool.')
@@ -354,24 +480,144 @@ class Backups:
             self.children.add(process)
         try:
             stdout, stderr = process.communicate(timeout=1800)
-        except BaseException:
-            try: os.killpg(process.pid,signal.SIGKILL)
-            except ProcessLookupError: pass
-            process.communicate()
-            raise
         finally:
-            with self.children_lock: self.children.discard(process)
+            try: self._stop_owned_child(process)
+            finally:
+                process.stdout.close(); process.stderr.close()
+                if getattr(process, '_unforge_group_stopped', False) is True and process.poll() is not None:
+                    with self.children_lock: self.children.discard(process)
         if process.returncode: raise Problem('Backup tool failed: ' + stderr.decode(errors='replace')[-2000:])
         return stdout.decode(errors='replace')
 
     def _record(self, job):
-        atomic(self.root / ('job-'+job['id']+'.json'), job)
-        self.jobs[job['id']] = copy.deepcopy(job)
+        with self.lock:
+            atomic(self.root / ('job-'+job['id']+'.json'), job)
+            self.jobs[job['id']] = copy.deepcopy(job)
+        if job.get('state') in ('completed', 'failed', 'interrupted'):
+            with self._retention_lock:
+                self._retention_expires = 0
+                self._retention_revision += 1
+        if self.on_changed:
+            try: self.on_changed()
+            except Exception: pass  # A UI subscriber cannot invalidate a saved receipt.
+
+    def _stream_command(self, repository, key, consume, *args):
+        """Bounded encrypted readback without a second plaintext working set."""
+        if self.closed.is_set(): raise Problem('Backup verification cancelled.')
+        env = {k:os.environ[k] for k in ('PATH','TMPDIR','SYSTEMROOT') if k in os.environ}
+        env.update(HOME=str(self.root), RESTIC_PASSWORD_FILE=str(key), GOMAXPROCS='2')
+        with self.children_lock:
+            if self.closed.is_set(): raise Problem('Backup verification cancelled.')
+            process = subprocess.Popen([self.executable, '--repo', str(repository), '--no-cache', '--no-lock', *args],
+                env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+            self.children.add(process)
+        errors = bytearray(); timed_out = threading.Event()
+        def drain_errors():
+            try:
+                while True:
+                    data = process.stderr.read(4096)
+                    if not data: break
+                    errors.extend(data); del errors[:-2000]
+            finally:
+                # If group cancellation fails, the reader owns deferred close
+                # until shutdown can stop the remaining pipe writer.
+                process.stderr.close()
+        def kill():
+            timed_out.set()
+            self._stop_owned_child(process)
+        reader = threading.Thread(target=drain_errors, daemon=True)
+        deadline = threading.Timer(1800, kill); deadline.daemon = True
+        started = False
+        try:
+            reader.start(); started = True; deadline.start()
+            result = consume(process.stdout)
+            # A valid tar may have padding after its end marker. Bound it so a
+            # malformed tool/repository cannot fill memory or hold a pipe open.
+            padding = 0
+            while True:
+                chunk = process.stdout.read(8192)
+                if not chunk: break
+                padding += len(chunk)
+                if padding > 1024 * 1024 or any(chunk): raise Problem('Unexpected data after encrypted verification archive.')
+            process.wait(timeout=10); reader.join(timeout=5)
+            if timed_out.is_set(): raise Problem('Encrypted verification timed out.')
+            if process.returncode: raise Problem('Backup tool failed: ' + errors.decode(errors='replace'))
+            return result
+        finally:
+            deadline.cancel()
+            try: self._stop_owned_child(process)
+            finally:
+                process.stdout.close()
+                if started: reader.join(timeout=5)
+                if started and reader.is_alive():
+                    # BufferedReader.close can block behind a descendant's
+                    # open pipe. Keep the owned group tracked for shutdown.
+                    process._unforge_group_stopped = False
+                    error = sys.exc_info()[1]
+                    if error is None: raise Problem('Backup verification child group did not stop.')
+                    if hasattr(error, 'add_note'):
+                        error.add_note('Backup verification child group remains tracked for shutdown.')
+                else:
+                    process.stderr.close()
+                if getattr(process, '_unforge_group_stopped', False) is True and process.poll() is not None:
+                    with self.children_lock: self.children.discard(process)
+
+    @staticmethod
+    def verify_workspace_stream(reader, expected, manifest_hash, cancel=None):
+        """Verify exact decrypted bytes, paths and types from Restic's tar stream."""
+        entries = {}
+        for item in expected.get('files', []):
+            name, size, checksum = item.get('path'), item.get('bytes'), item.get('sha256')
+            if (not isinstance(name, str) or not name or Path(name).is_absolute()
+                    or any(part in ('', '.', '..') for part in name.split('/')) or '\\' in name or '\0' in name
+                    or name == 'UNFORGE-RECOVERY.json' or name in entries
+                    or type(size) is not int or size < 0 or not isinstance(checksum, str) or not re.fullmatch('[a-f0-9]{64}', checksum)):
+                raise Problem('Invalid streamed recovery inventory.')
+            entries[name] = item
+        if (expected.get('schema') != 1 or len(entries) > MAX_FILES or expected.get('fileCount') != len(entries)
+                or sum(item['bytes'] for item in entries.values()) > MAX_BYTES):
+            raise Problem('Invalid streamed recovery inventory.')
+        seen = set(); directories = set(); marker_seen = False
+        try:
+            with tarfile.open(fileobj=reader, mode='r|') as archive:
+                for member in archive:
+                    if cancel is not None and cancel.is_set(): raise Problem('Backup verification cancelled.')
+                    name = member.name.rstrip('/') if member.isdir() else member.name
+                    if (not name or Path(name).is_absolute() or any(part in ('', '.', '..') for part in name.split('/'))
+                            or '\\' in name or '\0' in name or not (member.isfile() or member.isdir())):
+                        raise Problem('Unsafe entry in encrypted verification archive.')
+                    if member.isdir():
+                        if name in directories or name in entries or name in seen: raise Problem('Conflicting verification archive entry.')
+                        directories.add(name)
+                        if len(directories) > MAX_FILES * 4: raise Problem('Verification archive contains too many directories.')
+                        continue
+                    if name in seen or name in directories: raise Problem('Duplicate verification archive entry.')
+                    seen.add(name)
+                    if name == 'UNFORGE-RECOVERY.json':
+                        if marker_seen or member.size > 64 * 1024**2: raise Problem('Invalid streamed workspace manifest.')
+                        marker_seen = True
+                    elif name not in entries or member.size != entries[name]['bytes']:
+                        raise Problem('Unexpected or damaged file in encrypted verification: ' + name)
+                    checksum = hashlib.sha256(); read = 0
+                    with archive.extractfile(member) as content:
+                        while True:
+                            if cancel is not None and cancel.is_set(): raise Problem('Backup verification cancelled.')
+                            chunk = content.read(1024 * 1024)
+                            if not chunk: break
+                            read += len(chunk); checksum.update(chunk)
+                    wanted = manifest_hash if name == 'UNFORGE-RECOVERY.json' else entries[name]['sha256']
+                    if read != member.size or checksum.hexdigest() != wanted:
+                        raise Problem('Encrypted snapshot readback differs from captured content: ' + name)
+        except (tarfile.TarError, EOFError, OSError) as error:
+            raise Problem('Encrypted verification archive is incomplete or invalid.') from error
+        if not marker_seen or seen != set(entries) | {'UNFORGE-RECOVERY.json'}:
+            raise Problem('Unexpected or missing files in encrypted verification.')
+        return expected
 
     def start(self, *, standalone=False):
         with self.lock:
+            if self._operation_active(): raise Problem('A backup or restore is already running.')
             if not self.settings().get('configured'): raise Problem('Set up a backup destination and recovery key first.')
-            if self.worker and self.worker.is_alive(): raise Problem('A backup or restore is already running.')
             job = {'id':uuid.uuid4().hex, 'kind':'backup', 'state':'running','createdAt':stamp(), 'phase':'Preparing a consistent copy', 'destinations':[]}
             self._record(job)
             self.worker = threading.Thread(target=self._backup if standalone else self._backup_incremental, args=(job,), daemon=False)
@@ -388,7 +634,7 @@ class Backups:
 
     def _workspace_listing(self):
         listing = {}
-        for current, dirs, files in os.walk(self.engine.home, followlinks=False):
+        for current, dirs, files in os.walk(self.engine.home, followlinks=False, onerror=fail_backup_walk):
             real_directory(Path(current))
             dirs[:] = sorted(d for d in dirs if d not in EXCLUDED and not (Path(current)/d).is_symlink())
             for name in sorted(files):
@@ -401,7 +647,7 @@ class Backups:
                 if len(listing) > MAX_FILES: raise Problem('Workspace has too many files to snapshot.')
         return listing
 
-    def _copy_workspace(self, target, capacity_check=None):
+    def _copy_workspace(self, target, capacity_check=None, *, clone_capture=False):
         """Copy files without following links; SQLite uses its online backup API."""
         manifest = {'schema':1,'createdAt':stamp(),'files':[], 'excluded':[], 'externalData':'Not included. Bind and export hosted data separately.'}
         baseline = self._workspace_listing()
@@ -410,8 +656,8 @@ class Backups:
         else:
             storage_guard([(target, estimated_workspace_storage(baseline), 'workspace snapshot')])
         sqlite_files, journal_files = set(), set()
-        count = total = 0
-        for current, dirs, files in os.walk(self.engine.home, followlinks=False):
+        count = total = cloned = 0
+        for current, dirs, files in os.walk(self.engine.home, followlinks=False, onerror=fail_backup_walk):
             if self.closed.is_set(): raise Problem('Backup cancelled while copying source.')
             real_directory(Path(current))
             relative = Path(current).relative_to(self.engine.home)
@@ -444,8 +690,8 @@ class Backups:
                 before = source.stat()
                 if not stat.S_ISREG(before.st_mode):
                     manifest['excluded'].append({'path':str(rel),'reason':'not a regular file'}); continue
-                count += 1; total += before.st_size
-                if count > MAX_FILES or total > MAX_BYTES: raise Problem('Workspace exceeds this backup limit (250,000 files / 50 GiB). No complete-backup claim was recorded.')
+                count += 1
+                if count > MAX_FILES: raise Problem('Workspace exceeds this backup limit (250,000 files / 50 GiB). No complete-backup claim was recorded.')
                 destination = target/rel
                 sqlite = name in databases
                 if sqlite:
@@ -461,6 +707,8 @@ class Backups:
                             def progress(status, remaining, page_count):
                                 if self.closed.is_set() or time.monotonic() - started > 30:
                                     raise Problem('SQLite snapshot timed out or was cancelled: ' + str(rel))
+                                if total + page_count * page_size > MAX_BYTES:
+                                    raise Problem('Captured workspace exceeds the 50 GiB backup limit, including SQLite WAL data.')
                                 storage_guard([(target, max(remaining, 1) * page_size, 'SQLite snapshot')])
                             db.backup(out, pages=256, progress=progress, sleep=0.05)
                             checkpoint = out.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
@@ -475,26 +723,34 @@ class Backups:
                     with regular_reader(destination) as reader: os.fsync(reader.fileno())
                     sync_directory(destination.parent)
                 else:
-                    with regular_reader(source) as reader, destination.open('wb') as writer:
-                        copied = 0
-                        while True:
-                            if self.closed.is_set(): raise Problem('Backup cancelled while copying source.')
-                            chunk = reader.read(1024 * 1024)
-                            if not chunk: break
-                            copied += len(chunk)
-                            if copied > before.st_size: raise Problem('File grew during backup: ' + str(rel))
-                            writer.write(chunk)
-                        writer.flush(); os.fsync(writer.fileno())
+                    if clone_capture and clone_file(source, destination):
+                        cloned += 1
+                        with regular_reader(destination) as reader: os.fsync(reader.fileno())
+                    else:
+                        if clone_capture:
+                            storage_guard([(target, before.st_size + 4096, 'full-copy capture fallback on this volume')])
+                        with regular_reader(source) as reader, destination.open('wb') as writer:
+                            copied = 0
+                            while True:
+                                if self.closed.is_set(): raise Problem('Backup cancelled while copying source.')
+                                chunk = reader.read(1024 * 1024)
+                                if not chunk: break
+                                copied += len(chunk)
+                                if copied > before.st_size: raise Problem('File grew during backup: ' + str(rel))
+                                writer.write(chunk)
+                            writer.flush(); os.fsync(writer.fileno())
                     destination.chmod(stat.S_IMODE(before.st_mode))
                     after = source.stat()
                     if (before.st_ino,before.st_size,before.st_mtime_ns) != (after.st_ino,after.st_size,after.st_mtime_ns):
                         raise Problem('A file changed during backup. Retry after saving: '+str(rel))
-                manifest['files'].append({'path':str(rel),'bytes':destination.stat().st_size,'sha256':digest(destination,self.closed),'sqlite':sqlite})
+                captured_bytes = destination.stat().st_size; total += captured_bytes
+                if total > MAX_BYTES: raise Problem('Captured workspace exceeds the 50 GiB backup limit.')
+                manifest['files'].append({'path':str(rel),'bytes':captured_bytes,'sha256':digest(destination,self.closed),'sqlite':sqlite})
         after = self._workspace_listing()
         ignored = sqlite_files | journal_files
         if {key:value for key,value in baseline.items() if key not in ignored} != {key:value for key,value in after.items() if key not in ignored}:
             raise Problem('Workspace files changed during the snapshot. Save external edits and retry.')
-        manifest.update(fileCount=count,sourceBytes=total, consistency='Managed engine writes were paused; ordinary files were checked before and after capture. Each SQLite database was backed up transactionally, independently. External applications were not quiesced; this is not an atomic multi-database snapshot.')
+        manifest.update(fileCount=count,sourceBytes=total, capture={'clonedFiles':cloned,'copiedFiles':count-cloned}, consistency='Managed engine writes were paused; ordinary files were checked before and after capture. Each SQLite database was backed up transactionally, independently. External applications were not quiesced; this is not an atomic multi-database snapshot.')
         atomic(target/'UNFORGE-RECOVERY.json',manifest)
         return manifest
 
@@ -588,7 +844,7 @@ class Backups:
             if digest(candidate,cancel) != checksum: raise Problem('Backup is incomplete or damaged: ' + name)
             expected.add(name)
         actual = set()
-        for parent, dirs, files in os.walk(path, followlinks=False):
+        for parent, dirs, files in os.walk(path, followlinks=False, onerror=fail_backup_walk):
             for name in dirs:
                 if (Path(parent)/name).is_symlink(): raise Problem('Backup directory links are not allowed.')
             for name in files:
@@ -615,7 +871,7 @@ class Backups:
             from incremental_backups import IncrementalBackups
             return IncrementalBackups(self).restore(path, password, destination)
         with self.lock:
-            if self.worker and self.worker.is_alive(): raise Problem('Wait for the current backup operation.')
+            if self._operation_active(): raise Problem('Wait for the current backup operation.')
             source=Path(path).expanduser()
             target=Path(destination).expanduser()
             if not source.is_absolute() or not target.is_absolute(): raise Problem('Choose absolute backup and recovery paths.')
@@ -639,6 +895,8 @@ class Backups:
                 storage_guard([(target.parent, size + count * 4096 + STORAGE_METADATA_ALLOWANCE, 'workspace recovery')])
                 self._command(source/'repository',key,'restore','latest','--target',str(temp/'result'))
                 manifest=self.verify_workspace(temp/'result/workspace',self.closed)
+                from recovery_links import normalize_recovered_workspace
+                recovery_links=normalize_recovered_workspace(temp/'result/workspace',target)
                 # Nothing is executed. Runtime bindings are preserved as evidence,
                 # but the caller chooses when/how to activate the recovered workspace.
                 sync_tree(temp/'result/workspace')
@@ -646,7 +904,7 @@ class Backups:
                 if target.exists() or target.is_symlink(): raise Problem('Recovery destination was created by another operation.')
                 os.rename(temp/'result/workspace',target)
                 sync_directory(target.parent)
-            result={'path':str(target),'files':manifest['fileCount'],'restoredAt':stamp(),'state':'restored','applicationsStarted':False,'externalData':manifest['externalData'],'excluded':manifest['excluded']}
+            result={'path':str(target),'files':recovery_links['restoredFileCount'],'capturedFiles':manifest['fileCount'],'restoredAt':stamp(),'state':'restored','applicationsStarted':False,'externalData':manifest['externalData'],'excluded':manifest['excluded'],'recoveryLinks':recovery_links}
             atomic(self.root/('restore-'+uuid.uuid4().hex+'.json'),result)
             return result
 
@@ -654,13 +912,13 @@ class Backups:
         self.closed.set()
         with self.children_lock: children = list(self.children)
         for process in children:
-            try: os.killpg(process.pid,signal.SIGTERM)
-            except ProcessLookupError: pass
+            self._stop_owned_child(process, signal.SIGTERM, reap=False)
         if self.worker and self.worker.is_alive(): self.worker.join(timeout=5)
         with self.children_lock: children = list(self.children)
         for process in children:
-            try: os.killpg(process.pid,signal.SIGKILL)
-            except ProcessLookupError: pass
+            self._stop_owned_child(process)
+            if getattr(process, '_unforge_group_stopped', False) is True and process.poll() is not None:
+                with self.children_lock: self.children.discard(process)
         if self.worker and self.worker.is_alive(): self.worker.join()
 
     def _cloud_report(self, helper, path, timeout=15):
@@ -689,17 +947,16 @@ class Backups:
                 if process.returncode: raise Problem('Could not read iCloud upload state.')
                 return json.loads(output)
         finally:
-            try: os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError: pass
-            process.wait()
-            process.stdin.close()
-            process.stdout.close()
-            with self.children_lock: self.children.discard(process)
+            try: self._stop_owned_child(process)
+            finally:
+                process.stdin.close(); process.stdout.close()
+                if getattr(process, '_unforge_group_stopped', False) is True and process.poll() is not None:
+                    with self.children_lock: self.children.discard(process)
 
     def cloud_rehearse(self, job_id, path, password, destination):
         """Evict only a registered iCloud backup's cache, then prove recovery."""
         with self.lock:
-            if self.worker and self.worker.is_alive(): raise Problem('Wait for the current backup operation.')
+            if self._operation_active(): raise Problem('Wait for the current backup operation.')
             if not isinstance(job_id, str) or job_id not in self.jobs:
                 raise Problem('Choose a known recovery point.')
             job = copy.deepcopy(self.jobs[job_id])
@@ -827,7 +1084,7 @@ class Backups:
 
     def refresh_cloud(self, job_id):
         with self.lock:
-            if self.worker and self.worker.is_alive(): raise Problem('Wait for the current backup operation.')
+            if self._operation_active(): raise Problem('Wait for the current backup operation.')
             if not isinstance(job_id,str) or job_id not in self.jobs: raise Problem('Choose a known recovery point.')
             job = copy.deepcopy(self.jobs[job_id])
             if job['state'] != 'completed': raise Problem('Wait for a completed recovery point.')
@@ -843,7 +1100,12 @@ class Backups:
                     expected_files = None
                     if d.get('format') == 'incremental-v2':
                         from incremental_backups import IncrementalBackups
-                        inspection = IncrementalBackups(self).inspect(cloud_path)
+                        reader = IncrementalBackups(self)
+                        point = Path(cloud_path)
+                        for metadata in (point.parent.parent/'VAULT.json',point/'POINT.json'):
+                            info = reader._object_stat(metadata)
+                            if reader._dataless(info): storage_guard([(metadata.parent,info.st_size,'upload-check recovery metadata')])
+                        inspection = reader.inspect(cloud_path, verify=False)
                         vault = Path(inspection['vaultPath'])
                         registered = {(item.get('kind'),item.get('path')) for item in self.settings().get('destinations',[])}
                         if (('icloud',d.get('path')) not in registered or d.get('vaultPath') != str(vault)
@@ -863,10 +1125,15 @@ class Backups:
                                     if (Path(parent)/name).is_symlink(): raise Problem('Shared vault links cannot be inspected.')
                                 for name in names:
                                     candidate = Path(parent)/name
-                                    with regular_reader(candidate) as stream: info = os.fstat(stream.fileno())
+                                    info = candidate.lstat()
+                                    if not stat.S_ISREG(info.st_mode): raise Problem('Shared vault upload metadata requires ordinary files.')
                                     inventory[candidate.relative_to(vault).as_posix()] = (info.st_ino,info.st_size,info.st_mtime_ns)
                             return inventory
                         inventory = metadata_inventory()
+                        for entry in inspection['requiredFiles']:
+                            identity = inventory.get(entry['path'])
+                            if identity is None or identity[1] != entry['bytes']:
+                                raise Problem('Required recovery object is missing or has changed size during the upload metadata check.')
                         expected_files = len(inventory)
                     report=self._cloud_report(helper,cloud_path)
                     if not isinstance(report,dict) or report.get('state') not in ('uploaded','upload_pending','not_icloud','unknown'):
@@ -879,7 +1146,8 @@ class Backups:
                             raise Problem('The shared vault changed during its upload check.')
                         d['state']='cloud_uploaded'
                     if expected_files is not None:
-                        report = {**report,'scope':'entire shared vault','vaultPath':cloud_path,'selectedSnapshotId':inspection['snapshotId']}
+                        report = {**report,'scope':'entire shared vault','verificationMethod':'icloud-upload-metadata','vaultPath':cloud_path,
+                                  'selectedSnapshotId':inspection['snapshotId'],'metadataOnly':True,'contentVerified':False}
                     d['uploadEvidence']=report
                 except (OSError,ValueError,subprocess.SubprocessError) as e:
                     d['uploadEvidence']='Upload status unavailable: '+str(e)

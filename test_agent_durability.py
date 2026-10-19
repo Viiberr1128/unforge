@@ -22,6 +22,8 @@ class AgentDurabilityTests(unittest.TestCase):
         self.engine = Engine(self.base / 'home')
         self.project = self.engine.create('Durable garden')
         self.pid = self.project['id']
+        self.engine.edit(self.pid, '.unforge/app.json', json.dumps({'checks': {'schemaVersion': 1, 'jobs': [{'id': 'fixture', 'command': [sys.executable, '-c', 'raise SystemExit(0)']}]}}))
+        self.engine.save(self.pid, 'Configure explicit fixture checks')
         self.fake = self.base / 'fake-codex'
         self.fake.write_text('#!' + sys.executable + '\n'
                              'from pathlib import Path\n'

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, canPickFolder, pickFolder } from './api.js';
+import { coalescedRefresh } from './coalescedRefresh.js';
 
 const jobLabels = {running:'Making a recovery copy',completed:'Recovery copy created',failed:'Copy needs attention',interrupted:'Copy interrupted'};
 const fieldsetStyle = {border:0,padding:0,margin:0,minWidth:0};
@@ -21,7 +22,7 @@ function destinationLabel(destination) {
   if (destination.state === 'upload_pending') return 'Copied on this Mac · cloud upload not confirmed';
   if (destination.state === 'cloud_uploaded') return 'macOS reports uploaded · recovery from the cloud not tested';
   if (destination.state === 'cloud_verified') return 'Cloud verification recorded · review its evidence';
-  if (destination.state === 'copied_locally') return 'Local copy checked';
+  if (destination.state === 'copied_locally') return destination.publicationVerification ? 'New objects checked · reused inventory checked' : 'Local copy checked';
   return 'Copy status needs checking';
 }
 
@@ -36,8 +37,14 @@ export default function Backups({back,onBlocked}) {
   const [visiblePoints,setVisiblePoints] = useState(3);
   const needsNewKey = !!state && !state.configured && !state.keyConfigured;
   const hasPassphrase = !!(password || confirmation || restoreKey);
-  const load = useCallback(async () => { const value = await api('/backups'); setState(value); return value; }, []);
-  useEffect(() => { load().catch(e => setError(e.message)); }, [load]);
+  const statusReads = useRef(null);
+  const load = useCallback(() => statusReads.current?.request() || Promise.resolve(), []);
+  useEffect(() => {
+    const reads = coalescedRefresh(() => api('/backups'), {visible:() => !document.hidden, onValue:setState});
+    statusReads.current = reads;
+    load().catch(e => { if (statusReads.current === reads) setError(e.message); });
+    return () => { reads.dispose(); if (statusReads.current === reads) statusReads.current = null; };
+  }, [load]);
   useEffect(() => { onBlocked(busy || hasPassphrase); return () => onBlocked(false); }, [busy,hasPassphrase,onBlocked]);
   useEffect(() => {
     const warn = event => { if (busy || hasPassphrase) { event.preventDefault(); event.returnValue = ''; } };
@@ -45,12 +52,17 @@ export default function Backups({back,onBlocked}) {
     return () => window.removeEventListener('beforeunload',warn);
   }, [busy,hasPassphrase]);
   const running = !!state?.jobs?.some(job => job.state === 'running');
-  const followProgress = running || !!state?.schedule?.enabled || state?.watcher?.status === 'starting';
+  const followProgress = running || state?.watcher?.status === 'starting' || state?.retentionReview?.refreshDeferred || state?.retentionReview?.refreshPending;
   useEffect(() => {
     const refresh = () => { if (!document.hidden) load().catch(e => setError(e.message)); };
-    const timer = followProgress ? setInterval(refresh,5000) : null;
-    document.addEventListener('visibilitychange',refresh);
-    return () => { if (timer) clearInterval(timer); document.removeEventListener('visibilitychange',refresh); };
+    let timer = null;
+    const stop = () => { if (timer) clearInterval(timer); timer = null; };
+    const start = () => { if (followProgress && !document.hidden && !timer) timer = setInterval(refresh,5000); };
+    const visible = () => { if (document.hidden) stop(); else { refresh(); start(); } };
+    start();
+    document.addEventListener('visibilitychange',visible);
+    window.addEventListener('unforge-workspace-changed',refresh);
+    return () => { stop(); document.removeEventListener('visibilitychange',visible); window.removeEventListener('unforge-workspace-changed',refresh); };
   }, [followProgress,load]);
   async function act(fn,message) {
     setBusy(true); setError(''); setNotice('');
@@ -109,7 +121,7 @@ export default function Backups({back,onBlocked}) {
   const observing = watcher.observing === true && watcher.status === 'watching';
   return <>
     <button className="text-button" disabled={busy || hasPassphrase} onClick={back}>← Your projects</button>
-    <header className="project-heading"><div><h1>Keep your work.</h1><p>A recovery copy you can open even if this Mac is gone.</p></div><button disabled={busy || running || !state.configured || !state.available} onClick={() => act(() => api('/backups/start',{}),'Backup started. You can continue using Unforge while it makes and checks the copy.')}>Back up now</button></header>
+    <header className="project-heading"><h1>Backups & recovery</h1><button disabled={busy || running || !state.configured || !state.available} onClick={() => act(() => api('/backups/start',{}),'Backup started.')}>Back up now</button></header>
     {error && <p role="alert" className="error">{error}</p>}{notice && <p role="status" className="notice">{notice}</p>}
     {state.settingsRecoveryRequired && <p role="alert" className="error">{state.settingsError} Save a destination below to repair backup settings.{state.keyConfigured ? ' Your existing local recovery key will be preserved.' : ''}</p>}
     {state.historyErrors?.length > 0 && <div role="alert" className="error"><p>Some recovery history needs attention. Available recovery points are still listed below.</p>{state.historyErrors.map((message,index) => <p key={index}>{message}</p>)}</div>}
@@ -157,6 +169,7 @@ export default function Backups({back,onBlocked}) {
         <p className="note">Shorter intervals protect recent changes sooner. Longer intervals use less backup history and verification work. Unchanged contents are reused; history still grows. Existing recovery points are never automatically deleted.</p>
         <p className="note">Changes are grouped into recovery points, normally no more than once every {Math.round(interval / 60)} minute{interval !== 60 ? 's' : ''}. Unforge must stay open. Continuous editing will not postpone every backup.</p>
         {scheduleError && <p role="alert" className="error">{scheduleError}</p>}
+        {scheduleError && schedule.enabled && <button className="secondary" disabled={busy || running} onClick={() => act(() => api('/backups/retry',{}),'Retry queued.')}>Retry now</button>}
         {schedule.blockedReason && <p role="status">{schedule.blockedReason}</p>}
         {schedule.runningJobId ? <p role="status">An automatic recovery copy is being made. New changes stay queued for the following copy.</p> : schedule.pending ? <p role="status">{schedule.enabled ? `Changes are waiting for the next recovery copy${schedule.nextDueAt ? `, due no earlier than ${when(schedule.nextDueAt)}` : ''}.` : 'Automatic backups are off. Use Back up now whenever you want a recovery copy.'}</p> : <p>No reported changes are waiting for an automatic copy. This is not confirmation of cloud upload.</p>}
       </>}
@@ -167,15 +180,31 @@ export default function Backups({back,onBlocked}) {
       <button className="text-button" disabled={busy} onClick={() => act(load,'Backup and watcher status refreshed.')}>Refresh backup status</button>
     </section>}
 
+    {state.retentionReview && <details>
+      <summary>Stored generations · {storageSize(state.retentionReview.privateRepositoryBytes)}</summary>
+      {state.retentionReview.checkedAt && <p className="note">
+        {state.retentionReview.cacheStatus === 'stale' ? 'Last inventory' : 'Inventory checked'} {when(state.retentionReview.checkedAt)}
+        {state.retentionReview.refreshDeferred ? ' · Refresh deferred during the active operation.' : state.retentionReview.refreshPending ? ' · Refreshing.' : ''}
+      </p>}
+      {state.retentionReview.cacheStatus === 'not-yet-available' && <p role="status">
+        {state.retentionReview.refreshDeferred ? 'Storage inventory will be checked after the active operation.' : state.retentionReview.refreshPending ? 'Checking storage inventory…' : 'Storage inventory is unavailable.'}
+      </p>}
+      {state.retentionReview.error && <p className="error">{state.retentionReview.error}</p>}
+      {state.retentionReview.generations.map(generation => <p key={generation.generation}><strong>{generation.active ? 'Active' : generation.sealed ? 'Sealed' : 'Needs review'} generation</strong> · {generation.snapshots} snapshots · {storageSize(generation.repositoryBytes)}<br/><code>{generation.path}</code></p>)}
+      <p className="note">Review complete generations after independently verifying recovery. Shared packs cannot be deleted individually.</p>
+    </details>}
     <section aria-labelledby="recovery-points-heading"><h2 id="recovery-points-heading">Recovery points</h2>
       {!jobs.length && <p>No recovery points yet. Save your setup, then choose Back up now. After it finishes, try recovering a separate copy.</p>}
       {jobs.slice(0,visiblePoints).map((job,index) => {
         const content = <article className={index === 0 ? 'request' : undefined} key={job.id}>
         <h3>{jobLabels[job.state] || 'Recovery status needs checking'}</h3><p>{when(job.createdAt)}{job.files ? ` · ${job.files} files` : ''}<br/>{job.phase}</p>
+        {job.verification?.method === 'exact-snapshot-stream' && <p className="note">Encrypted snapshot read back and verified against every captured file. A separate restored workspace has not been opened.</p>}
+        {(job.phaseDurationsSeconds || job.storagePlan) && <details><summary>Timing and storage</summary><pre>{JSON.stringify({phaseSeconds:job.phaseDurationsSeconds,storage:job.storagePlan},null,2)}</pre></details>}
         {job.error && <p role="alert" className="error">{job.error}</p>}
         {job.destinations?.map(d => <div key={d.path}>
           <p><strong>{d.name}: {destinationLabel(d)}</strong><br/><code>{d.backupPath}</code></p>
           {d.format === 'incremental-v2' && <><p className="note">{storageSize(d.addedBytes)} added · {storageSize(d.reusedBytes)} reused. Keep the entire shared vault; this point cannot restore on its own.</p><details><summary>Shared vault location</summary><p><code>{d.vaultPath}</code></p><p>Do not delete shared files to remove an old recovery point.</p></details></>}
+          {d.publicationVerification && <details><summary>Publication verification</summary><p>New objects were checked byte for byte. Unchanged objects were checked against their recorded file identity; their contents were not read again.</p>{d.publicationVerification.legacyMetadataOnlyObjects > 0 && <p className="note">{d.publicationVerification.legacyMetadataOnlyObjects} existing objects use a legacy completed-point metadata baseline. Run a separate recovery test to verify their full contents.</p>}<p className="note">This does not confirm cloud upload or recovery from another device.</p></details>}
           {d.checkedAt && <p className="note">Last upload check: {when(d.checkedAt)}</p>}
           {d.uploadEvidence && <details><summary>What this upload check established</summary><p>{typeof d.uploadEvidence === 'string' ? d.uploadEvidence : d.uploadEvidence.error || d.uploadEvidence.evidence || 'Read-only operating-system metadata; no independent cloud recovery was performed.'}</p>{typeof d.uploadEvidence === 'object' && Number.isInteger(d.uploadEvidence.files) && <p className="note">{d.uploadEvidence.uploaded ?? 0} of {d.uploadEvidence.files} inspected files{d.uploadEvidence.scope === 'entire shared vault' ? ' across the entire shared vault' : ''} reported uploaded. These flags do not prove the backup can be retrieved from another computer.</p>}</details>}
           {d.cloudRecoveryEvidence && <p className={d.cloudRecoveryEvidence.state === 'failed' ? 'error' : 'note'} role={d.cloudRecoveryEvidence.state === 'failed' ? 'alert' : undefined}>{d.cloudRecoveryEvidence.state === 'verified' ? `Cloud download and file recovery verified on this Mac at ${when(d.cloudRecoveryEvidence.finishedAt)}. Recovery on a second device has not been tested.` : d.cloudRecoveryEvidence.error || 'A cloud recovery check has not finished. No complete recovery proof is recorded.'}</p>}

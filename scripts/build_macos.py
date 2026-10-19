@@ -138,11 +138,124 @@ def notarize_app(app, archive, credentials):
         'xcrun', 'notarytool', 'submit', archive,
         '--key', credentials['key_path'],
         '--key-id', credentials['key_id'],
-        '--wait', '--timeout', '30m',
+        '--wait', '--timeout', '30m', '--output-format', 'json',
     ]
     if credentials['issuer_id']:
         command.extend(['--issuer', credentials['issuer_id']])
-    run(*command)
+    result = run(*command, capture_output=True, text=True)
+    try:
+        evidence = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise RuntimeError('Apple did not return a valid notarization receipt.') from error
+    if evidence.get('status') != 'Accepted':
+        raise RuntimeError('Apple did not accept the notarization submission.')
+    return {'status': 'Accepted', 'submissionId': evidence.get('id')}
+
+
+def source_identity(root=ROOT):
+    """Capture inputs before compilation, then require the same inputs afterward."""
+    root = Path(root)
+    files = [p for p in root.glob('*.py') if p.is_file()]
+    files.extend(root / name for name in ('package.json', 'package-lock.json', 'vite.config.js', 'index.html'))
+    for folder in ('src', 'macos', 'scripts', 'dist'):
+        files.extend(p for p in (root / folder).rglob('*')
+                     if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc')
+    manifest = {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in sorted(files)}
+    manifest_bytes = json.dumps(manifest, sort_keys=True).encode()
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    top = subprocess.run(['git', 'rev-parse', '--show-toplevel'], cwd=root, env=env,
+                         capture_output=True, text=True, timeout=10)
+    revision, dirty = None, None
+    if top.returncode == 0 and Path(top.stdout.strip()).resolve() == root.resolve():
+        commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root, env=env,
+                                capture_output=True, text=True, timeout=10)
+        status = subprocess.run(['git', 'status', '--porcelain'], cwd=root, env=env,
+                                capture_output=True, text=True, timeout=10)
+        revision = commit.stdout.strip() if commit.returncode == 0 else None
+        dirty = bool(status.stdout) if status.returncode == 0 else None
+    return {'sourceRevision': revision,
+            'sourceDirty': dirty,
+            'sourceDigest': hashlib.sha256(manifest_bytes).hexdigest(),
+            'manifestBytes': manifest_bytes}
+
+
+def require_source_identity(expected, root=ROOT):
+    if source_identity(root) != expected:
+        raise RuntimeError('Source files or Git identity changed during compilation. Start again; the prior release is preserved.')
+
+
+def promote_artifacts(items):
+    """Replace a completed release together; restore every prior output on failure."""
+    items = [(Path(source), Path(destination)) for source, destination in items]
+    if not items or len({destination for _, destination in items}) != len(items):
+        raise RuntimeError('Invalid release promotion paths.')
+    parent = items[0][1].parent
+    for source, destination in items:
+        if destination.parent != parent or source == destination or source.is_symlink() or not source.exists():
+            raise RuntimeError('Invalid release promotion paths.')
+        if destination.is_symlink():
+            raise RuntimeError('Refusing to replace a linked release output.')
+    backup = Path(tempfile.mkdtemp(prefix='.previous-release-', dir=parent))
+    saved, installed = [], []
+    try:
+        for index, (_, destination) in enumerate(items):
+            if destination.exists():
+                previous = backup / str(index)
+                destination.replace(previous)
+                saved.append((previous, destination))
+        for source, destination in items:
+            source.replace(destination)
+            installed.append(destination)
+    except BaseException as error:
+        recovery_errors = []
+        for destination in reversed(installed):
+            try:
+                if destination.is_dir() and not destination.is_symlink():
+                    shutil.rmtree(destination)
+                else:
+                    destination.unlink(missing_ok=True)
+            except OSError as recovery_error:
+                recovery_errors.append(recovery_error)
+        for previous, destination in reversed(saved):
+            try:
+                previous.replace(destination)
+            except OSError as recovery_error:
+                recovery_errors.append(recovery_error)
+        if recovery_errors:
+            raise RuntimeError(f'Release promotion failed; preserved previous artifacts in {backup}.') from error
+        shutil.rmtree(backup)
+        raise
+    shutil.rmtree(backup)
+
+
+def finish_release(app, staging, artifacts, version, architecture, credentials, receipt):
+    """Verify staged bytes before making any app, archive, or receipt public."""
+    staging, artifacts = Path(staging), Path(artifacts)
+    archive = staging / f'Unforge-{version}-macos-{architecture}.zip'
+    package_app(app, archive)
+    verified = dict(receipt)
+    verified['notarized'] = False
+    verified['notarization'] = 'not-submitted'
+    if credentials:
+        evidence = notarize_app(app, archive, credentials)
+        run('xcrun', 'stapler', 'staple', app)
+        run('xcrun', 'stapler', 'validate', app)
+        # Only the stapled ticket changes. Never rewrite signed BUILD.json.
+        package_app(app, archive)
+        verified.update(notarized=True, notarization='accepted-and-stapled', notarySubmission=evidence)
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    verified.update(archive=archive.name, archiveSha256=digest)
+    external_receipt = staging / f'{archive.stem}.BUILD.json'
+    external_receipt.write_text(json.dumps(verified, indent=2) + '\n')
+    checksums = staging / 'SHA256SUMS'
+    checksums.write_text(f'{digest}  {archive.name}\n')
+    output = artifacts / 'Unforge.app'
+    final_archive = artifacts / archive.name
+    promote_artifacts([(app, output), (archive, final_archive),
+                       (external_receipt, artifacts / external_receipt.name),
+                       (checksums, artifacts / checksums.name)])
+    return output, final_archive, digest, verified
 
 
 def license_download(url, maximum=512 * 1024):
@@ -225,6 +338,9 @@ def main():
         parser.error('The frontend is missing; run npm run build.')
     # Apply the same private-file envelope to native bundles, including dist.
     run(sys.executable, '-c', 'from scripts.package_release import release_files; release_files()')
+    inputs = source_identity()
+    if json.loads((ROOT / 'package.json').read_text())['version'] != version:
+        raise RuntimeError('The source version changed while preparing the build. Start again.')
     if not BUILD_ENV.exists():
         venv.EnvBuilder(with_pip=True).create(BUILD_ENV)
     python = BUILD_ENV / 'bin/python'
@@ -248,12 +364,21 @@ def main():
             '--distpath', staging / 'frozen', '--workpath', staging / 'freeze-work',
             '--specpath', staging, '--paths', ROOT,
             '--add-data', f'{ROOT / "dist"}:dist',
-            '--hidden-import', 'agent_jobs', '--hidden-import', 'operations',
+            '--hidden-import', 'agent_jobs', '--hidden-import', 'agent_plans', '--hidden-import', 'lane_review',
+            '--hidden-import', 'operations',
             '--hidden-import', 'care', '--hidden-import', 'recovery',
             '--hidden-import', 'projects', '--hidden-import', 'drafts', '--hidden-import', 'runtime',
             '--hidden-import', 'backups', '--hidden-import', 'backup_scheduler',
             '--hidden-import', 'incremental_backups',
             '--hidden-import', 'workspace_watch',
+            '--hidden-import', 'build_info', '--hidden-import', 'change_feed',
+            '--hidden-import', 'operating', '--hidden-import', 'lanes',
+            '--hidden-import', 'integrate', '--hidden-import', 'checks',
+            '--hidden-import', 'releases', '--hidden-import', 'app_manifest',
+            '--hidden-import', 'exchange', '--hidden-import', 'github_import',
+            '--hidden-import', 'second_home',
+            '--hidden-import', 'recovery_status',
+            '--hidden-import', 'recovery_links',
             '--hidden-import', 'insights', ROOT / 'launcher.py', env=env)
         shutil.copytree(staging / 'frozen/unforge-engine', resources / 'engine', symlinks=True)
         shutil.copy2(restic, resources / 'engine/restic')
@@ -275,7 +400,7 @@ def main():
             'CFBundleName': 'Unforge', 'CFBundleDisplayName': 'Unforge',
             'CFBundleIdentifier': 'org.unforge.desktop', 'CFBundleExecutable': 'Unforge',
             'CFBundlePackageType': 'APPL', 'CFBundleShortVersionString': version,
-            'CFBundleVersion': '1', 'LSMinimumSystemVersion': '13.0',
+            'CFBundleVersion': version, 'LSMinimumSystemVersion': '13.0',
             'LSMultipleInstancesProhibited': True,
             'LSApplicationCategoryType': 'public.app-category.developer-tools',
             'NSHighResolutionCapable': True,
@@ -288,56 +413,30 @@ def main():
         copy_licenses(python, resources / 'Licenses')
         copy_restic_license(resources / 'Licenses', RESTIC_VERSION)
         shutil.copy2(ROOT / 'docs/MAC_APP.md', resources / 'MAC_APP.md')
-        git_revision = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT,
-                                      capture_output=True, text=True)
-        source_revision = git_revision.stdout.strip() if git_revision.returncode == 0 else None
-        git_status = subprocess.run(['git', 'status', '--porcelain'], cwd=ROOT,
-                                    capture_output=True, text=True)
-        source_files = [p for p in ROOT.glob('*.py') if p.is_file()]
-        source_files.extend(ROOT / name for name in ('package.json', 'package-lock.json', 'vite.config.js', 'index.html'))
-        for folder in ('src', 'macos', 'scripts', 'dist'):
-            source_files.extend(p for p in (ROOT/folder).rglob('*') if p.is_file() and '__pycache__' not in p.parts and p.suffix != '.pyc')
-        source_manifest = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(source_files)}
-        source_manifest_bytes = json.dumps(source_manifest, sort_keys=True).encode()
-        (resources / 'SOURCE-MANIFEST.json').write_bytes(source_manifest_bytes)
+        require_source_identity(inputs)
+        (resources / 'SOURCE-MANIFEST.json').write_bytes(inputs['manifestBytes'])
         identity = developer_id_identity()
         signing = 'developer-id' if identity else 'ad-hoc'
         if identity and not ENTITLEMENTS.is_file():
             parser.error('macos/Unforge.entitlements is required for Developer ID signing.')
         credentials = None if args.skip_notarize or signing != 'developer-id' else notary_credentials()
-        receipt = {'sourceDigest': hashlib.sha256(source_manifest_bytes).hexdigest(), 'version': version, 'architecture': architecture,
-                   'minimumMacOS': '13.0', 'sourceRevision': source_revision,
-                   'sourceDirty': bool(git_status.stdout) if git_status.returncode == 0 else None,
+        receipt = {'sourceDigest': inputs['sourceDigest'], 'version': version, 'architecture': architecture,
+                   'minimumMacOS': '13.0', 'sourceRevision': inputs['sourceRevision'],
+                   'sourceDirty': inputs['sourceDirty'],
                    'python': run(python, '--version', capture_output=True, text=True).stdout.strip(),
                    'restic': RESTIC_VERSION,
-                   'signing': signing, 'notarized': bool(credentials)}
+                   'signing': signing, 'notarized': None if credentials else False,
+                   'notarization': 'external-receipt' if credentials else 'not-submitted'}
         (resources / 'BUILD.json').write_text(json.dumps(receipt, indent=2) + '\n')
         if identity:
             sign_app(app, identity, ENTITLEMENTS)
         else:
             run('codesign', '--force', '--deep', '--sign', '-', app)
             run('codesign', '--verify', '--deep', '--strict', '--verbose=2', app)
-        output = ARTIFACTS / 'Unforge.app'
-        if output.exists():
-            if output.is_symlink():
-                raise RuntimeError('Refusing to replace a symlink at the app output path.')
-            shutil.rmtree(output)
-        shutil.move(app, output)
-    archive = ARTIFACTS / f'Unforge-{version}-macos-{architecture}.zip'
-    temporary_archive = archive.with_suffix('.zip.tmp')
-    package_app(output, temporary_archive)
-    temporary_archive.replace(archive)
-    if credentials:
-        notarize_app(output, archive, credentials)
-        run('xcrun', 'stapler', 'staple', output)
-        run('xcrun', 'stapler', 'validate', output)
-        receipt['notarized'] = True
-        package_app(output, temporary_archive)
-        temporary_archive.replace(archive)
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-    (ARTIFACTS / 'SHA256SUMS').write_text(f'{digest}  {archive.name}\n')
+        output, archive, digest, verified = finish_release(
+            app, staging, ARTIFACTS, version, architecture, credentials, receipt)
     print(f'\nApp: {output}\nArchive: {archive}\nSHA256: {digest}')
-    if signing == 'developer-id' and receipt.get('notarized'):
+    if signing == 'developer-id' and verified.get('notarized'):
         print('Developer ID signed, notarized, and stapled.')
     elif signing == 'developer-id':
         print('Developer ID signed with hardened runtime. Notarization skipped (no local notary credentials or --skip-notarize).')

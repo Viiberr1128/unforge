@@ -6,7 +6,7 @@ from pathlib import Path
 
 from engine import Engine, Problem
 from exchange import Exchange
-from github_import import GitHubImport, parse_workflow
+from github_import import GitHubImport, parse_workflow, command_for
 from lanes import Lanes
 from recovery import Recovery
 from second_home import SecondHome
@@ -64,6 +64,17 @@ jobs:
         self.assertFalse((self.root / '.github' / 'workflows' / 'ci.yml').exists())
         self.assertTrue(archived['parkedWorkflows'])
         self.assertFalse(self.github.inspect(self.pid)['needsGitHub'])
+
+    def test_shell_operators_remain_shell_operations(self):
+        self.assertEqual(command_for('npm test && npm run build'), ['bash', '-lc', 'npm test && npm run build'])
+        self.assertEqual(command_for('python3 -m unittest'), ['python3', '-m', 'unittest'])
+
+    def test_empty_import_preserves_existing_curated_checks(self):
+        graph = {'schemaVersion': 1, 'jobs': [{'id': 'real', 'command': ['python3', '-m', 'unittest']}]}
+        self.engine.edit(self.pid, '.unforge/app.json', json.dumps({'checks': graph}))
+        imported = self.github.import_workflows(self.pid)
+        self.assertEqual(imported['checks'], graph)
+        self.assertTrue(any(item['kind'] == 'existing-checks-preserved' for item in imported['leftovers']))
 
     def test_send_and_receive_change_as_a_file(self):
         lane = self.lanes.create(self.pid, 'Patch')

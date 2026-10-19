@@ -23,19 +23,26 @@ def main():
     if status.strip():
         print('Save a version first. Uncommitted files are not published.', file=sys.stderr)
         return 1
+    remote = subprocess.check_output(['git', '-C', str(ROOT), 'remote', 'get-url', 'origin']).decode().strip()
+    official = {
+        'https://github.com/Viiberr1128/unforge.git',
+        'git@github.com:Viiberr1128/unforge.git',
+    }
     private = os.environ.get('UNFORGE_PRIVATE_PUBLISH_CHECK')
+    if remote in official and not private:
+        print('Official publication requires UNFORGE_PRIVATE_PUBLISH_CHECK.', file=sys.stderr)
+        return 1
     if private:
+        if not Path(private).is_absolute() or not Path(private).is_file():
+            print('The private publication check must be an existing absolute file.', file=sys.stderr)
+            return 1
         code = run([sys.executable, private]).returncode
         if code:
             return code
     code = run([sys.executable, str(ROOT / 'scripts' / 'check_public_source.py')]).returncode
     if code:
         return code
-    remote = subprocess.check_output(['git', '-C', str(ROOT), 'remote', 'get-url', 'origin']).decode().strip()
-    if remote not in {
-        'https://github.com/Viiberr1128/unforge.git',
-        'git@github.com:Viiberr1128/unforge.git',
-    }:
+    if remote not in official:
         print('Origin is not the public Unforge mirror.', file=sys.stderr)
         return 1
     pushed = run(['git', 'push', 'origin', 'HEAD:main'])

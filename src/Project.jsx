@@ -8,10 +8,12 @@ import ProjectCare from './ProjectCare.jsx';
 import Recovery from './Recovery.jsx';
 import Runtime from './Runtime.jsx';
 import Lanes from './Lanes.jsx';
+import Operating from './Operating.jsx';
 
 export default function Project({ id, back, onUpdated, onNavigationBlocked, onOpenProject }) {
   const [project, setProject] = useState(null);
   const [tab, setTab] = useState('Overview');
+  const [openingLane, setOpeningLane] = useState(null);
   const [file, setFile] = useState('README.md');
   const [content, setContent] = useState('');
   const [draft, setDraft] = useState(false);
@@ -66,6 +68,16 @@ export default function Project({ id, back, onUpdated, onNavigationBlocked, onOp
     setProject(value); return value;
   }
   useEffect(() => { load().catch(e => setError(e.message)); }, [id]);
+  useEffect(() => {
+    const changed = () => { if (!draft && !busy && !childBlocked) load().catch(e => setError(e.message)); };
+    window.addEventListener('unforge-workspace-changed', changed);
+    return () => window.removeEventListener('unforge-workspace-changed', changed);
+  }, [id, draft, busy, childBlocked]);
+  useEffect(() => {
+    document.getElementById('main')?.scrollTo({top: 0});
+    const heading = document.querySelector('#main h1');
+    if (heading) { heading.setAttribute('tabindex', '-1'); heading.focus({preventScroll: true}); }
+  }, [id, tab, !!project]);
   useEffect(() => { onNavigationBlocked(draft || busy || childBlocked); return () => onNavigationBlocked(false); }, [draft, busy, childBlocked, onNavigationBlocked]);
   useEffect(() => {
     const warn = event => { if (draft) { event.preventDefault(); event.returnValue = ''; } };
@@ -106,35 +118,36 @@ export default function Project({ id, back, onUpdated, onNavigationBlocked, onOp
   }
   if (!project) return <><button className="text-button" onClick={back}><Icon name="back"/>Your projects</button><p role={error ? 'alert' : 'status'}>{error || 'Opening project…'}</p></>;
   const html = project.files.find(f => f.path === 'index.html')?.content;
+  const scriptedPreview = html && /<script\b/i.test(html);
   const readonly = fileData?.readonly;
   const requests = project.files.filter(f => f.path.startsWith('.unforge/requests/'));
   return <>
     <header className="page-top"><button className="text-button" onClick={back} disabled={draft || busy || childBlocked}><Icon name="back"/>Your projects</button><span className="local-state"><span className={`dot ${project.dirty || draft || childBlocked ? 'amber' : ''}`}/>{draft || childBlocked ? 'Work in progress in this view' : project.dirty ? 'Changes ready to save' : 'All changes saved'}</span></header>
-    <section className="project-heading"><div><h1>{project.name}</h1><p>{project.description || 'A place to start something useful.'}</p></div><button onClick={() => show('save')} disabled={busy || draft || childBlocked || !project.dirty}><Icon name="check"/>Save a version</button></section>
+    <section className="project-heading"><div><h1>{project.name}</h1></div><button onClick={() => show('save')} disabled={busy || draft || childBlocked || !project.dirty}><Icon name="check"/>Save a version</button></section>
     <nav className="tabs" aria-label="Project views">{['Overview', 'Lanes & ship', 'Run & check', 'Files', 'History', 'Project care', 'Recovery', 'Dependencies', 'Take it with you'].map(label => <button key={label} disabled={busy || ((draft || childBlocked) && label !== tab)} className={tab === label ? 'active' : ''} aria-current={tab === label ? 'page' : undefined} onClick={() => {setAgentRequest(null);setTab(label); setNotice('');}}>{label}</button>)}</nav>
     {error && <p role="alert" className="error">{error}</p>}{notice && <p role="status" className="notice">{notice}</p>}
     {!!storedDrafts.length && !draft && <div className="notice"><p>Saved editor drafts are available on this Mac.</p>{storedDrafts.map(item => <button className="text-button" key={item.path} disabled={busy || childBlocked} onClick={() => {setFile(item.path);setFileRefresh(value => value + 1);setTab('Files');}}>Continue {item.path}</button>)}</div>}
     {tab === 'Overview' && <div className="overview">
-      <div className="section-heading"><div><h2>A little room to experiment.</h2><p>A static preview of your project’s index.html. Scripts and external resources are disabled.</p></div><button className="secondary" onClick={() => {chooseFile('index.html'); setTab('Files');}}>Edit this page<Icon name="arrow"/></button></div>
-      {html ? <iframe title="Project static preview" className="preview" sandbox="" referrerPolicy="no-referrer" srcDoc={previewDocument(html)}/> : <div className="empty"><p>Add index.html in Files to preview a page here.</p></div>}
+      <Operating id={id} disabled={busy || draft || childBlocked} onUpdated={onUpdated} onOpenLane={lane => {setOpeningLane(lane);setTab('Lanes & ship');}}/>
+      {html && !scriptedPreview && <><div className="section-heading"><h2>Static preview</h2><button className="secondary" onClick={() => {chooseFile('index.html'); setTab('Files');}}>Edit page<Icon name="arrow"/></button></div><iframe title="Project static preview" className="preview" sandbox="" referrerPolicy="no-referrer" srcDoc={previewDocument(html)}/></>}
+      {scriptedPreview && <p className="note">This app requires JavaScript. Use its live URL or Run & check to open it.</p>}
       <AgentWork id={id} dirty={project.dirty} initialRequest={agentRequest} onBlocked={setChildBlocked} onApplied={async () => {await load(); await onUpdated();}}/>
-      <section className="request-band"><div><h2>What would make this more useful?</h2><p>Write a clear request for your coding agent. It stays in the project as an ordinary file.</p></div><button className="secondary" onClick={() => show('request')}>Write a request<Icon name="arrow"/></button></section>
+      <section className="request-band"><h2>Saved requests</h2><button className="secondary" onClick={() => show('request')}>Write a request<Icon name="arrow"/></button></section>
       {requests.length > 0 && <details><summary>{requests.length} saved request{requests.length !== 1 ? 's' : ''}</summary>{requests.map(r => <article className="request" key={r.path}><small>{r.path}</small><pre>{r.content}</pre></article>)}</details>}
-      <p className="note">Request files are portable handoffs. They do not start an agent automatically.</p>
     </div>}
-    {tab === 'Lanes & ship' && <Lanes id={id} dirty={project.dirty} onBlocked={setChildBlocked} onUpdated={async () => {await load();await onUpdated();}}/>}
+    {tab === 'Lanes & ship' && <Lanes id={id} dirty={project.dirty} initialLaneId={openingLane} onBlocked={setChildBlocked} onUpdated={async () => {await load();await onUpdated();}}/>}
     {tab === 'Run & check' && <Runtime id={id} dirty={project.dirty} onBlocked={setChildBlocked} onUpdated={async () => {await load();await onUpdated();}}/>}
     {tab === 'Project care' && <ProjectCare id={id} onUpdated={async () => {await load();await onUpdated();}} onBlocked={setChildBlocked} onSimplify={request => {setAgentRequest({text:request,id:crypto.randomUUID()});setTab('Overview');}}/>}
     {tab === 'Recovery' && <Recovery key={`${id}:${project.history[0]?.id}`} id={id} dirty={project.dirty} onUpdated={async () => {await load();await onUpdated();}} onBlocked={setChildBlocked} onOpenProject={onOpenProject}/>}
     {tab === 'Files' && <>
-      <div className="section-heading"><div><h2>Everything is a file.</h2><p>{draft ? 'Write your changes before switching files or views.' : 'Edit text here, or use your own editor.'}</p></div><button className="secondary" disabled={draft || busy} onClick={() => show('file')}>New file<Icon name="plus"/></button></div>
+      <div className="section-heading"><h2>Files</h2><button className="secondary" disabled={draft || busy} onClick={() => show('file')}>New file<Icon name="plus"/></button></div>
       <div className="editor-layout"><nav className="file-list" aria-label="Project files">{(filePage?.files || []).map(f => <button key={f.path} className={f.path === file ? 'selected' : ''} disabled={busy || (draft && f.path !== file)} onClick={() => chooseFile(f.path)}><Icon name="file" size={16}/><span>{f.path}</span></button>)}<p className="note">{filePage ? `${filePage.files.length} of ${filePage.total} files shown` : 'Loading file list…'}</p>{filePage?.nextCursor != null && <button disabled={fileBusy || draft || busy} onClick={moreFiles}>{fileBusy ? 'Loading…' : 'Show more files'}</button>}</nav>
         <div className="editor"><label htmlFor="file-content">{file}{readonly ? ' · Read only' : ''}</label>{fileError && <p role="alert" className="error">{fileError}</p>}{readBusy && <p role="status">Opening file…</p>}<textarea id="file-content" spellCheck={false} value={fileData || draft ? content : ''} readOnly={readonly} disabled={busy || readBusy || !fileData} onChange={e => {setContent(e.target.value); setDraft(true);}}/><div className="editor-actions"><span className="note" role="status">{draftStatus || 'Writing updates the file. Saving a version records its history.'}</span>{draft && <button className="text-button" disabled={busy} onClick={() => show('discard')}>Reload file</button>}<button disabled={!draft || busy || readonly || readBusy || !fileData} onClick={writeFile}>{busy ? 'Writing…' : 'Write file'}</button></div></div>
       </div>
       <details className="diff"><summary>Changes since your last saved version</summary><pre>{project.diff || (project.dirty ? 'New files have not been saved in a version yet.' : 'No changes since the last saved version.')}</pre></details>
     </>}
     {tab === 'History' && <>
-      <div className="section-heading"><div><h2>A history you can return to.</h2><p>Restoring adds a new version. It never erases the versions that came after.</p></div></div>
+      <div className="section-heading"><h2>History</h2></div>
       {project.dirty && <p className="notice">Save your current changes before restoring an earlier version.</p>}
       <ol className="history">{(historyPage?.history || project.history).map((version, index) => <li key={version.id}><span className="timeline-dot"/><div><h3>{version.message}</h3><p>{relativeDate(version.date)}<span className="technical"> · <code>{version.id.slice(0, 8)}</code></span>{index === 0 ? ' · Current version' : ''}</p></div>{index > 0 && <button className="secondary" disabled={busy || project.dirty} onClick={() => show({revision: version.id, message: version.message})}>Restore</button>}</li>)}</ol>{historyPage?.nextCursor != null && <button className="secondary" disabled={historyBusy || busy} onClick={olderHistory}>{historyBusy ? 'Loading…' : 'Load older versions'}</button>}
     </>}

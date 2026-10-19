@@ -64,7 +64,7 @@ def command_for(run):
     if SECRET_EXPR.search(run) or UNSAFE.search(run) or re.search(
             r'GITHUB_|RUNNER_|_ACCESS_TOKEN|_API_TOKEN|_SECRET|wrangler\.js deploy|functions deploy', run):
         return None
-    if '\n' in run:
+    if '\n' in run or re.search(r'&&|\|\||[;<>|`]|\$\(|\$\{', run):
         return ['bash', '-lc', run]
     try:
         parts = shlex.split(run)
@@ -116,9 +116,9 @@ class GitHubImport:
                     continue
                 slug = Path(relative).stem.replace(' ', '-')[:24]
                 jobs.append({'id': f'{slug}-{index}'[:40], 'command': command, 'timeoutSeconds': 300, 'cache': True})
+        graph = {'schemaVersion': 1, 'jobs': jobs[:16]} if jobs else None
         if not jobs:
-            jobs = [{'id': 'ok', 'command': ['python3', '-c', 'print("ok")'], 'timeoutSeconds': 30, 'cache': True}]
-        graph = {'schemaVersion': 1, 'jobs': jobs[:16]}
+            leftovers.append({'kind': 'checks-not-configured', 'answer': 'No runnable local checks were imported. Configure the project’s existing checks.'})
         path = root / '.unforge' / 'app.json'
         data = {}
         if path.is_file():
@@ -126,10 +126,14 @@ class GitHubImport:
                 loaded = json.loads(path.read_text(encoding='utf-8'))
                 if isinstance(loaded, dict):
                     data = loaded
-            except (ValueError, OSError, UnicodeError):
-                data = {}
+            except (ValueError, OSError, UnicodeError) as error:
+                raise Problem('Existing app settings are damaged; import left them unchanged') from error
         data['schemaVersion'] = 1
-        data['checks'] = graph
+        if graph:
+            data['checks'] = graph
+        elif data.get('checks'):
+            graph = data['checks']
+            leftovers.append({'kind': 'existing-checks-preserved', 'answer': 'No new local checks were found; existing checks were preserved.'})
         data.pop('githubAbsent', None)
         expected = path.read_text(encoding='utf-8') if path.is_file() else None
         self.engine.edit(pid, '.unforge/app.json', json.dumps(data, indent=2) + '\n', expected)

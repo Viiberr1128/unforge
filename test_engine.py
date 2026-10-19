@@ -344,7 +344,10 @@ class EngineTests(unittest.TestCase):
                 return status, data
             status, health = call('GET', '/api/health')
             self.assertEqual(status, 200)
-            self.assertEqual(json.loads(health), {'ok': True, 'version': '0.3.1'})
+            identity = json.loads(health)
+            self.assertTrue(identity['ok'])
+            self.assertEqual(identity['version'], json.loads((Path(__file__).parent/'package.json').read_text())['version'])
+            self.assertIn('workspace-events', identity['capabilities'])
             status, data = call('GET', '/api/session')
             self.assertEqual(status, 200)
             token = json.loads(data)['token']

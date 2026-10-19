@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, importBundle } from './api.js';
 import { Icon } from './ui.jsx';
 import Projects, { CreateProject } from './Projects.jsx';
@@ -9,6 +9,7 @@ import Preferences from './Preferences.jsx';
 import Allowance from './Allowance.jsx';
 import Backups from './Backups.jsx';
 import BackupHealth from './BackupHealth.jsx';
+import { followWorkspaceChanges } from './workspaceEvents.js';
 
 export default function App() {
   const [projects, setProjects] = useState([]);
@@ -21,6 +22,13 @@ export default function App() {
   const [error, setError] = useState('');
   const [setup, setSetup] = useState(null);
   const [navigationBlocked, setNavigationBlocked] = useState(false);
+  const main = useRef(null);
+  useEffect(() => {
+    main.current?.scrollTo({top: 0});
+    window.scrollTo({top: 0});
+    const heading = main.current?.querySelector('h1');
+    if (heading) { heading.setAttribute('tabindex', '-1'); heading.focus({preventScroll: true}); }
+  }, [view, selected]);
   useEffect(()=>{const show=event=>setError(event.detail);window.addEventListener('unforge-backup-warning',show);return()=>window.removeEventListener('unforge-backup-warning',show);},[]);
   // Read by the native window before reload or quit.
   useEffect(() => {
@@ -31,6 +39,7 @@ export default function App() {
   function updateOptions(value) {setOptions(value); try {localStorage.setItem('unforge-display',JSON.stringify(value));} catch {setError('This browser could not save your display preferences. They apply for this session.');}}
   async function refresh() { const result = await api('/projects'); setProjects(Array.isArray(result) ? result : result.projects); setProjectProblems(result.problems || []); }
   useEffect(() => { refresh().catch(e => setError(e.message)).finally(() => setLoading(false)); api('/setup').then(setSetup).catch(() => {}); }, []);
+  useEffect(() => followWorkspaceChanges(() => refresh().catch(e => setError(e.message))), []);
   function home() { setSelected(null); setView('projects'); refresh().catch(e => setError(e.message)); }
   async function create(body) { const result = await api('/projects', body); setCreating(false); setSelected(result.id); setView('projects'); refresh().catch(() => setError('Project created. The project list could not refresh yet.')); }
   async function importProject(file, capsule) { const result = await importBundle(file, capsule); setImporting(false); setSelected(result.id); setView('projects'); refresh().catch(() => setError('Project imported. The project list could not refresh yet.')); }
@@ -41,7 +50,7 @@ export default function App() {
       <nav aria-label="Workspace usage"><button className={view === 'backups' ? 'selected' : ''} disabled={navigationBlocked} onClick={() => {setSelected(null); setView('backups');}}><Icon name="folder"/>Backups & recovery</button><button className={view === 'allowance' ? 'selected' : ''} disabled={navigationBlocked} onClick={() => {setSelected(null); setView('allowance');}}><Icon name="clock"/>Usage & practice</button></nav>
       <div className="sidebar-foot"><span className="dot"/>On this computer</div>
     </aside>
-    <main id="main" className={selected ? 'workspace' : ''}>
+    <main ref={main} id="main" className={selected ? 'workspace' : ''}>
       {(selected || view !== 'backups') && <BackupHealth disabled={navigationBlocked || creating || importing} onOpen={() => {if (!navigationBlocked && !creating && !importing) {setSelected(null);setView('backups');}}}/>}
       {projectProblems.length > 0 && <div className="notice" role="alert"><strong>{projectProblems.length} project{projectProblems.length === 1 ? '' : 's'} need attention.</strong><p>Their folders are still here. Other projects remain available.</p><details><summary>Folders to inspect or recover</summary>{projectProblems.map(item=><p key={item.id}><code>{item.path}</code><br/>{item.error}</p>)}</details></div>}
       {setup && setup.gitInstalled === false && <div className="error" role="alert"><strong>Git is missing.</strong><p>{setup.gitHint || 'Install Git, then reopen Unforge. Apple’s installer: xcode-select --install'}</p></div>}

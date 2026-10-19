@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from engine import Problem
+from checks import resolve_commit
 
 
 class AppManifest:
@@ -17,15 +18,11 @@ class AppManifest:
         blockers = []
         remotes = self.engine.git(root, 'remote', '-v', allowed_returncodes=(0, 128)).decode(errors='replace')
         if 'github.com' in remotes.lower():
-            blockers.append('A GitHub remote is still configured. Import Actions if you need them, then leave GitHub for this app.')
+            blockers.append('An optional GitHub remote is configured.')
         workflows = list((root / '.github' / 'workflows').glob('*.yml')) + list((root / '.github' / 'workflows').glob('*.yaml'))
         if workflows:
             blockers.append('GitHub workflow files are still here. Import GitHub Actions to turn run steps into local checks.')
         tree = self.engine.git(root, 'rev-parse', 'HEAD').decode().strip()
-        if self.checks and not self.checks.passed(pid, tree):
-            blockers.append('This version has not passed Unforge checks yet.')
-        if self.releases and not self.releases.last_observed(pid):
-            blockers.append('After you publish, open the live site and make sure it is this version.')
         document = {}
         path = root / '.unforge' / 'app.json'
         if path.is_file():
@@ -38,10 +35,39 @@ class AppManifest:
         if document.get('githubAbsent') is True:
             # A stored true is never trusted; only computed absence counts.
             blockers.append('You cannot mark GitHub gone by hand. Unforge looks at remotes, checks, and the live site.')
+        checks_status = 'not-configured'
+        checked = None
+        if self.checks:
+            try:
+                graph = self.checks.graph(pid, tree=tree)
+                if graph:
+                    checked = self.checks.result(pid, tree, graph)
+                    checks_status = checked.get('status') if checked else 'not-checked'
+            except Problem:
+                checks_status = 'invalid-configuration'
+        if checks_status != 'passed':
+            blockers.append('Configure local checks.' if checks_status == 'not-configured' else 'This version has not passed Unforge checks yet.')
+        production = None
+        if document.get('productionRef'):
+            try:
+                production = resolve_commit(self.engine, root, document['productionRef'])
+            except Problem:
+                blockers.append('The production source ref could not be resolved.')
+        observed = self.releases.last_observed(pid) if self.releases else None
+        expected = production or tree
+        current_observed = self.releases.last_observed(pid, tree=expected) if self.releases else None
+        if not current_observed:
+            blockers.append('Observe the live site for this source version.')
         status = dict(schemaVersion=1, githubAbsent=not blockers, blockers=blockers,
                       destinations=document.get('destinations') or [],
                       checks=document.get('checks'),
-                      liveVersion=tree)
+                      sourceVersion=tree, productionRef=document.get('productionRef'), productionVersion=production,
+                      sourceDirty=bool(self.engine.git(root, 'status', '--porcelain')),
+                      checksStatus=checks_status,
+                      checkedAt=checked.get('createdAt') if checked else None,
+                      liveVersion=observed.get('tree') if observed else None,
+                      observedAt=observed.get('observedAt') if observed else None,
+                      readiness=observed.get('readiness') if observed else None)
         return status
 
     def save(self, pid, document, expected=None):
@@ -50,6 +76,14 @@ class AppManifest:
         if document.get('githubAbsent') is True:
             raise Problem('You cannot mark GitHub gone by hand. Unforge looks at remotes, checks, and the live site.')
         payload = dict(document)
+        if payload.get('checks') is not None and self.checks:
+            self.checks.graph(pid, payload['checks'])
+        if payload.get('destinations') is not None and self.releases:
+            if not isinstance(payload['destinations'], list):
+                raise Problem('Destinations must be a list')
+            payload['destinations'] = [self.releases.validate_destination(item) for item in payload['destinations']]
+        if payload.get('productionRef'):
+            resolve_commit(self.engine, self.engine.root(pid), payload['productionRef'])
         payload.pop('githubAbsent', None)
         payload['schemaVersion'] = 1
         text = json.dumps(payload, indent=2) + '\n'

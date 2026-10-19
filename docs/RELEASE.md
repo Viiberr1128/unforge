@@ -10,15 +10,15 @@ On macOS or Linux, use Python 3.10+, Git 2.30+, and Node.js 22.12+ with npm. Fro
 npm ci --ignore-scripts
 ./check.sh
 python3 scripts/package_release.py
-python3 scripts/smoke_release.py artifacts/unforge-0.3.1.tar.gz
+python3 scripts/smoke_release.py artifacts/unforge-0.4.0.tar.gz
 ```
 
 `./check.sh` runs backend tests and frontend checks. Packaging requires a built interface and writes:
 
-- `artifacts/unforge-0.3.1.tar.gz`
-- `artifacts/unforge-0.3.1.tar.gz.sha256`
+- `artifacts/unforge-0.4.0.tar.gz`
+- `artifacts/unforge-0.4.0.tar.gz.sha256`
 
-The archive also contains `MANIFEST.sha256.json`, recording a SHA-256 digest for each packaged file. The packager writes a copy under `artifacts/`. These checksums detect differences; they are not a signed publisher identity.
+The archive also contains `MANIFEST.sha256.json`, recording a SHA-256 digest for each packaged file, and `SOURCE-BUILD.json`, identifying the captured checkout and source digest. The packager writes a manifest copy under `artifacts/`. Files are captured into private staging; the archive and its hashes use the same captured bytes. Source or Git changes refuse promotion, and failed promotion restores the prior archive, manifest and checksum. These checksums detect differences; they are not a signed publisher identity.
 
 The archive includes `dist`, so recipients need Python and Git but do not need Node, npm, or an initial frontend dependency download. Keep the archive and checksum together.
 
@@ -35,16 +35,16 @@ Check the archive's contents for unintended local files or credentials. Extract 
 A recipient can verify the checksum on macOS from the directory containing both files:
 
 ```sh
-shasum -a 256 -c unforge-0.3.1.tar.gz.sha256
+shasum -a 256 -c unforge-0.4.0.tar.gz.sha256
 ```
 
 After extracting the archive, run `./start.sh` or double-click `start.command` on macOS. The app listens locally at `http://127.0.0.1:4319`.
 
 ## Native Mac package
 
-After the checks above, run `python3 scripts/build_macos.py --skip-web-build` on a Mac. The Apple Silicon package is `artifacts/macos/Unforge-0.3.1-macos-arm64.zip`, with its checksum in `artifacts/macos/SHA256SUMS`. It targets macOS 13 or later and bundles Python, the built interface, Restic, and native workspace and iCloud helpers. Git remains a prerequisite; Node and Python are not needed to open the packaged app. Individual projects may need their own development tools.
+After the checks above, run `python3 scripts/build_macos.py --skip-web-build` on a Mac. The Apple Silicon package is `artifacts/macos/Unforge-0.4.0-macos-arm64.zip`, with its checksum in `artifacts/macos/SHA256SUMS`. It targets macOS 13 or later and bundles Python, the built interface, Restic, and native workspace and iCloud helpers. Git remains a prerequisite; Node and Python are not needed to open the packaged app. Individual projects may need their own development tools.
 
-The current Mac zip is Developer ID signed, notarized, and stapled. Gatekeeper acceptance on another Mac still depends on that Mac, the ticket remaining valid, and the archive matching the published checksum. See [the Mac guide](MAC_APP.md) for installation, workspace switching, runtime limits, and build details. Neither packaging script installs the app or publishes it.
+Signing and notarization depend on the build machine and selected options. Check the embedded `BUILD.json` for signing identity and the sibling versioned `.BUILD.json` release receipt for verified notarization and the archive checksum. `notarized: true` in that external receipt requires an accepted submission and successful staple validation; `false` means notarization was not completed. Gatekeeper acceptance on another Mac also depends on that Mac, the ticket remaining valid, and the archive matching its checksum. See [the Mac guide](MAC_APP.md) for installation, workspace switching, runtime limits, and build details. Neither packaging script installs the app or publishes it.
 
 ## Recovery format and validation scope
 
@@ -58,7 +58,7 @@ Local restoration, macOS upload flags, same-Mac iCloud rehydration, and recovery
 
 The source and release artifacts can be distributed through GitHub, another file host, or direct transfer under the MIT license. No particular release host is required to run the app. The optional GitHub workflow runs local-equivalent checks for public repository pull requests or manual dispatch; it is skipped in private copies and does not publish or deploy anything. Uploading or publishing is not performed by the packaging script.
 
-To update the public GitHub mirror from a clean checkout of this source, run `python3 scripts/publish_public_github.py`. That push is blocked when `scripts/check_public_source.py` finds a home path, private key, or workspace project folder. It does not copy anything from a person's Unforge home directory.
+To update the public GitHub mirror from a clean checkout of this source, set `UNFORGE_PRIVATE_PUBLISH_CHECK` to the maintainer-only absolute scanner path, then run `python3 scripts/publish_public_github.py`. The official mirror refuses publication without both that private denylist and `scripts/check_public_source.py`; forks may run the generic check independently. These checks reject known home paths, private keys, workspace state, and private Fleet state. They do not copy anything from a person's Unforge home directory.
 
 GitHub Pages cannot run the Python backend. Serving `dist` alone does not provide a functioning Unforge workspace. This release does not automatically provision public hosting, deploy a user's projects, or configure paid providers.
 

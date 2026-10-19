@@ -1,5 +1,6 @@
 """Publication checks use disposable source trees, never a user's workspace."""
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -37,6 +38,88 @@ class ReleasePrivacyTests(unittest.TestCase):
     def commit_source(self):
         subprocess.run(['git', 'init', '-q', str(self.root)], check=True, capture_output=True)
         subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True, capture_output=True)
+
+    def published_bytes(self):
+        return {path.name:path.read_bytes() for path in (self.archive,
+                self.archive.with_suffix('.gz.sha256'), self.archive.parent / 'MANIFEST.sha256.json')}
+
+    def test_release_envelope_includes_runtime_loaded_lane_review(self):
+        self.assertIn('lane_review.py', package_release.ROOT_FILES)
+        self.assertIn('test_lane_review.py', package_release.ROOT_FILES)
+
+    def test_manifest_and_source_identity_describe_exact_captured_archive_bytes(self):
+        self.commit_source()
+        def git(*args):
+            return subprocess.check_output(['git','-C',str(self.root),*args], stderr=subprocess.DEVNULL)
+        git('config','user.name','Fixture'); git('config','user.email','fixture@unforge.invalid')
+        git('commit','-qm','Source fixture')
+        revision = git('rev-parse','HEAD').decode().strip()
+        self.package()
+        with tarfile.open(self.archive) as archive:
+            prefix = 'unforge-0.3.0/'
+            manifest = json.load(archive.extractfile(prefix + 'MANIFEST.sha256.json'))
+            self.assertEqual(set(archive.getnames()), {prefix + name for name in manifest} | {prefix + 'MANIFEST.sha256.json'})
+            for name, checksum in manifest.items():
+                self.assertEqual(hashlib.sha256(archive.extractfile(prefix + name).read()).hexdigest(), checksum)
+            receipt = json.load(archive.extractfile(prefix + 'SOURCE-BUILD.json'))
+        self.assertEqual(receipt['sourceRevision'], revision)
+        self.assertFalse(receipt['sourceDirty'])
+        source = {key:value for key,value in manifest.items() if key != 'SOURCE-BUILD.json'}
+        self.assertEqual(receipt['sourceDigest'], hashlib.sha256(json.dumps(source,sort_keys=True).encode()).hexdigest())
+
+    def test_archive_write_failure_preserves_prior_archive_manifest_and_checksum(self):
+        self.package()
+        previous = self.published_bytes()
+        with patch.object(tarfile.TarFile, 'add', side_effect=OSError('Archive write interrupted')):
+            with self.assertRaisesRegex(OSError, 'Archive write interrupted'):
+                self.package()
+        self.assertEqual(self.published_bytes(), previous)
+
+    def test_concurrent_source_edit_is_not_archived_and_preserves_prior_release(self):
+        self.package()
+        previous = self.published_bytes()
+        original_add = tarfile.TarFile.add
+        example = self.root / 'docs/example.md'
+        captured = example.read_bytes()
+        def add_and_change(archive, path, *args, **kwargs):
+            if kwargs.get('arcname') == 'unforge-0.3.0/docs/example.md':
+                self.assertEqual(Path(path).read_bytes(), captured)
+                example.write_text('External source edit during archive creation')
+            return original_add(archive, path, *args, **kwargs)
+        with patch.object(tarfile.TarFile, 'add', new=add_and_change):
+            with self.assertRaisesRegex(SystemExit, 'Source changed during packaging'):
+                self.package()
+        self.assertEqual(self.published_bytes(), previous)
+
+    def test_git_revision_change_during_packaging_preserves_prior_release(self):
+        self.commit_source()
+        def git(*args):
+            subprocess.run(['git','-C',str(self.root),*args], check=True, capture_output=True)
+        git('config','user.name','Fixture'); git('config','user.email','fixture@unforge.invalid')
+        git('commit','-qm','Source fixture')
+        self.package(); previous = self.published_bytes()
+        original_add = tarfile.TarFile.add
+        def add_and_commit(archive, path, *args, **kwargs):
+            if kwargs.get('arcname') == 'unforge-0.3.0/docs/example.md':
+                git('commit','--allow-empty','-qm','Concurrent source identity')
+            return original_add(archive, path, *args, **kwargs)
+        with patch.object(tarfile.TarFile, 'add', new=add_and_commit):
+            with self.assertRaisesRegex(SystemExit, 'Git identity changed'):
+                self.package()
+        self.assertEqual(self.published_bytes(), previous)
+
+    def test_source_promotion_failure_rolls_back_all_previous_outputs(self):
+        self.package(); previous = self.published_bytes()
+        replace = Path.replace
+        def interrupted(path, target):
+            if path.name == 'MANIFEST.sha256.json' and Path(target) == self.archive.parent / path.name:
+                raise OSError('Manifest promotion interrupted')
+            return replace(path, target)
+        with patch.object(Path, 'replace', new=interrupted):
+            with self.assertRaisesRegex(OSError, 'Manifest promotion interrupted'):
+                self.package()
+        self.assertEqual(self.published_bytes(), previous)
+        self.assertFalse(list(self.archive.parent.glob('.previous-release-*')))
 
     def test_archive_has_no_build_account_metadata_and_rebuild_is_identical(self):
         self.package()

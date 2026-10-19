@@ -239,6 +239,8 @@ class CloudRehearsalTests(unittest.TestCase):
         helper.assert_called_once_with(self.helper,str(self.vault))
         self.assertEqual(destination['state'],'cloud_uploaded')
         self.assertEqual(destination['uploadEvidence']['scope'],'entire shared vault')
+        self.assertTrue(destination['uploadEvidence']['metadataOnly'])
+        self.assertFalse(destination['uploadEvidence']['contentVerified'])
         self.assertEqual(destination['uploadEvidence']['selectedSnapshotId'],snapshot)
         with patch('backups.cloud_helper',return_value=self.helper), \
                 patch.object(self.service,'_cloud_report',return_value={'state':'uploaded','files':1,'uploaded':1}):

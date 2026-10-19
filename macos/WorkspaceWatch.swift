@@ -12,7 +12,8 @@ guard canonical.path == folder.path,
       FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory),
       isDirectory.boolValue else { exit(2) }
 let watchRoot = folder.path
-let ignoredComponents: Set<String> = [".backups", ".runtime", "operation-owners", ".server.lock"]
+let ignoredComponents: Set<String> = [".backups", ".runtime", "operation-owners", ".server.lock",
+    "node_modules", ".venv", ".venv-macos", "__pycache__", ".DS_Store"]
 var lastSignal: TimeInterval = 0
 var pendingSignal: DispatchWorkItem?
 

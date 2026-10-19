@@ -73,13 +73,28 @@ def main():
     raw.add_argument('path', help='API path such as /backups or /projects/ID/runtime')
     raw.add_argument('--from-file', type=Path, help='POST a JSON object; omit for GET')
     commands.add_parser('projects', help='List owned projects')
-    commands.add_parser('agent-status', help='Check installed optional Codex support; does not invoke it')
-    agent_start = commands.add_parser('agent-start', help='Start Codex in an isolated project copy using your configured account')
+    commands.add_parser('agent-status', help='Check installed optional local agent support; does not invoke it')
+    agent_plan = commands.add_parser('agent-plan', help='Plan bounded AI work without invoking a provider')
+    agent_plan.add_argument('project')
+    agent_plan.add_argument('--from-file', required=True, type=Path, help='Desired outcome as UTF-8 text')
+    agent_plan_start = commands.add_parser('agent-start-plan', help='Start an exact saved agent plan')
+    agent_plan_start.add_argument('project')
+    agent_plan_start.add_argument('plan')
+    agent_plan_start.add_argument('--operation-id', help='Stable ID for this exact start. Reuse it after a lost response.')
+    agent_start = commands.add_parser('agent-start', help='Start a local agent in an isolated project copy using your configured account')
     agent_start.add_argument('project')
     agent_start.add_argument('--from-file', required=True, type=Path)
     agent_start.add_argument('--operation-id', help='Stable ID for this exact request. Reuse it after a lost response; changing the request requires a different ID.')
-    for action in ('agent-show', 'agent-cancel', 'agent-apply', 'agent-consequences'):
-        commands.add_parser(action).add_argument('job')
+    agent_start.add_argument('--provider', choices=('codex', 'subscription-fleet'), default='codex')
+    agent_start.add_argument('--acceptance-file', type=Path, help='Fleet only: concrete acceptance criteria.')
+    agent_start.add_argument('--allow-path', action='append', default=[], help='Fleet only: exact file the candidate may change; repeat up to eight times.')
+    agent_start.add_argument('--size', choices=('small', 'medium', 'large'), default='medium', help='Fleet only: bounded task size.')
+    for action in ('agent-show', 'agent-cancel', 'agent-apply', 'agent-recover', 'agent-reject', 'agent-consequences'):
+        sub = commands.add_parser(action)
+        sub.add_argument('job')
+        if action == 'agent-apply':
+            sub.add_argument('--review-acknowledged', action='store_true',
+                             help='Required for Fleet candidates: confirm the reviewer report and exact diff were inspected.')
     create = commands.add_parser('create', help='Create a local project')
     create.add_argument('name')
     create.add_argument('--description', default='')
@@ -150,6 +165,22 @@ def main():
     bind.add_argument('project')
     bind.add_argument('--from-file', required=True, type=Path, help='JSON destination object; never include tokens')
     commands.add_parser('setup', help='Show whether Git is installed and how to rehearse a second workspace')
+    commands.add_parser('build', help='Identify the running engine build and capabilities')
+    operating = commands.add_parser('operating', help='Show working source, production ref, and Git worktrees')
+    operating.add_argument('project')
+    observe = commands.add_parser('observe', help='Read back an existing bound deployment without publishing')
+    observe.add_argument('project')
+    observe.add_argument('destination')
+    rollback = commands.add_parser('rollback', help='Redeploy a retained earlier artifact')
+    rollback.add_argument('project')
+    rollback.add_argument('destination')
+    conflicts = commands.add_parser('lane-conflicts', help='Read unresolved lane conflict contents')
+    conflicts.add_argument('project'); conflicts.add_argument('lane')
+    resolve = commands.add_parser('lane-resolve', help='Resolve one lane conflict')
+    resolve.add_argument('project'); resolve.add_argument('lane'); resolve.add_argument('path')
+    resolve.add_argument('--strategy', choices=('ours','theirs','edit'), required=True)
+    resolve.add_argument('--from-file', type=Path)
+    resolve.add_argument('--revision', required=True)
     github = commands.add_parser('github-import', help='Turn GitHub Actions run steps into local Unforge checks')
     github.add_argument('project')
     github_archive = commands.add_parser('github-archive', help='Remove GitHub remotes and park workflow files')
@@ -183,15 +214,34 @@ def main():
             result = client.call(args.path, read_json(args.from_file, dict) if args.from_file else None)
         elif command == 'projects': result = client.call('/projects')
         elif command == 'agent-status': result = client.call('/agent/status')
+        elif command == 'agent-plan':
+            result = client.call('/agent/plans', {
+                'projectId': args.project, 'outcome': args.from_file.read_text(encoding='utf-8')})
+        elif command == 'agent-start-plan':
+            operation_id = args.operation_id if args.operation_id is not None else uuid.uuid4().hex
+            if args.operation_id is None:
+                print(json.dumps({'operationId': operation_id, 'note': 'Keep this ID and use --operation-id with the same plan if the response is lost.'}), file=sys.stderr)
+            result = client.call('/agent/jobs', {
+                'projectId': args.project, 'planId': args.plan, 'operationId': operation_id})
         elif command == 'agent-start':
             request = args.from_file.read_text(encoding='utf-8')
             operation_id = args.operation_id if args.operation_id is not None else uuid.uuid4().hex
             if args.operation_id is None:
                 print(json.dumps({'operationId': operation_id, 'note': 'Keep this ID and use --operation-id with the same request if the response is lost.'}), file=sys.stderr)
-            result = client.call('/agent/jobs', {'projectId': args.project, 'request': request, 'operationId': operation_id})
+            payload = {'projectId': args.project, 'request': request, 'operationId': operation_id, 'provider': args.provider}
+            if args.provider == 'subscription-fleet':
+                if not args.acceptance_file or not args.allow_path:
+                    raise ValueError('Subscription Fleet requires --acceptance-file and at least one --allow-path.')
+                payload['fleet'] = {'acceptance': args.acceptance_file.read_text(encoding='utf-8'),
+                                    'allowPaths': args.allow_path, 'size': args.size}
+            elif args.acceptance_file or args.allow_path:
+                raise ValueError('--acceptance-file and --allow-path are only used with Subscription Fleet.')
+            result = client.call('/agent/jobs', payload)
         elif command == 'agent-show': result = client.call('/agent/jobs/' + args.job)
         elif command == 'agent-consequences': result = client.call('/agent/jobs/' + args.job + '/consequences')
-        elif command in ('agent-cancel', 'agent-apply'): result = client.call('/agent/jobs/' + args.job + '/' + command.removeprefix('agent-'), {})
+        elif command in ('agent-cancel', 'agent-apply', 'agent-recover', 'agent-reject'):
+            payload = {'reviewAcknowledged': args.review_acknowledged} if command == 'agent-apply' else {}
+            result = client.call('/agent/jobs/' + args.job + '/' + command.removeprefix('agent-'), payload)
         elif command == 'create': result = client.call('/projects', {'name': args.name, 'description': args.description})
         elif command == 'import': result = client.call('/import', {'path': str(args.path.resolve()), 'name': args.name})
         elif command == 'recovery-import': result = client.call('/recovery/import', {'path': str(args.path.resolve())})
@@ -212,6 +262,13 @@ def main():
         elif command == 'publish': result = client.call(f'/projects/{args.project}/releases/publish', {'destinationId': args.destination})
         elif command == 'bind': result = client.call(f'/projects/{args.project}/releases/bind', {'destination': read_json(args.from_file, dict)})
         elif command == 'setup': result = client.call('/setup')
+        elif command == 'build': result = client.call('/build')
+        elif command == 'operating': result = client.call(f'/projects/{args.project}/operating')
+        elif command in ('observe', 'rollback'): result = client.call(f'/projects/{args.project}/releases/{command}', {'destinationId': args.destination})
+        elif command == 'lane-conflicts': result = client.call(f'/projects/{args.project}/lanes/{args.lane}/conflicts')
+        elif command == 'lane-resolve':
+            if args.strategy == 'edit' and args.from_file is None: raise ValueError('Choose --from-file for edited conflict text')
+            result = client.call(f'/projects/{args.project}/lanes/{args.lane}/resolve', {'path': args.path, 'strategy': args.strategy, 'revision': args.revision, 'content': args.from_file.read_text() if args.from_file else None})
         elif command == 'github-import': result = client.call(f'/projects/{args.project}/github/import', {})
         elif command == 'github-archive': result = client.call(f'/projects/{args.project}/github/archive', {})
         elif command == 'send-change':

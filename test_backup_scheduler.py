@@ -165,7 +165,7 @@ class BackupSchedulerTests(unittest.TestCase):
         self.restart()
         self.scheduler._step()
         after = self.scheduler.state()
-        self.assertEqual(after['dirtyGeneration'], before['dirtyGeneration'])
+        self.assertEqual(after['dirtyGeneration'], before['dirtyGeneration'] + 1)
         self.assertEqual(after['backedUpGeneration'], before['runningGeneration'])
         self.assertTrue(after['pending'])
         self.assertEqual(self.backups.starts, 1)
@@ -178,6 +178,52 @@ class BackupSchedulerTests(unittest.TestCase):
         self.assertTrue(self.scheduler.state()['pending'])
         self.assertEqual(self.scheduler.state()['backedUpGeneration'], 0)
         self.assertEqual(self.backups.starts, 1)
+
+    def test_daily_capture_failures_retry_in_minutes_and_success_resets_backoff(self):
+        self.scheduler.configure(True, 86400)
+        self.scheduler._step()
+        for delay in (300, 600, 1200, 2400, 3600, 3600):
+            self.backups.finish('failed'); self.scheduler._step()
+            self.assertEqual(self.scheduler.state()['nextDueAt'], self.clock() + delay)
+            starts = self.backups.starts
+            self.clock.advance(delay - 1); self.scheduler._step()
+            self.assertEqual(self.backups.starts, starts)
+            self.clock.advance(1); self.scheduler._step()
+            self.assertEqual(self.backups.starts, starts + 1)
+        self.backups.finish(); self.scheduler._step()
+        self.assertEqual(self.scheduler.state()['consecutiveFailures'], 0)
+        self.assertFalse(self.scheduler.state()['pending'])
+
+    def test_opening_clean_schedule_reconciles_edits_while_closed(self):
+        self.complete_initial()
+        before = self.scheduler.state()['dirtyGeneration']
+        self.scheduler.close()
+        (self.engine.home / 'external-edit.txt').write_text('written while closed')
+        self.restart()
+        state = self.scheduler.state()
+        self.assertTrue(state['pending'])
+        self.assertTrue(state['startupReconciled'])
+        self.assertEqual(state['dirtyGeneration'], before + 1)
+        self.clock.advance(300); self.scheduler._step()
+        self.assertEqual(self.backups.starts, 2)
+
+    def test_retry_now_does_not_wait_for_daily_success_interval_or_duplicate_running_job(self):
+        self.scheduler.configure(True, 86400); self.scheduler._step()
+        self.backups.finish('failed'); self.scheduler._step()
+        self.scheduler.retry_now(); self.scheduler._step()
+        self.assertEqual(self.backups.starts, 2)
+        self.scheduler.retry_now(); self.scheduler._step()
+        self.assertEqual(self.backups.starts, 2)
+
+    def test_old_daily_failure_history_is_upgraded_to_bounded_retry(self):
+        self.scheduler.configure(True, 86400)
+        self.scheduler.data.update(lastError='space unavailable', lastAttemptAt=self.clock(),
+                                   retryAfter=self.clock()+86400)
+        self.scheduler._persist()
+        value = json.loads(self.scheduler.path.read_text()); value.pop('consecutiveFailures')
+        self.scheduler.path.write_text(json.dumps(value))
+        self.restart()
+        self.assertEqual(self.scheduler.state()['nextDueAt'], self.clock()+300)
 
     def test_manual_backup_or_restore_is_not_duplicated_or_claimed_as_our_capture(self):
         self.backups.start()
@@ -277,7 +323,8 @@ class BackupSchedulerTests(unittest.TestCase):
         self.assertFalse(self.scheduler.state()['pending'])
         self.restart()
         self.assertFalse(self.scheduler.state()['recoveryRequired'])
-        self.assertFalse(self.scheduler.state()['pending'])
+        self.assertTrue(self.scheduler.state()['pending'])
+        self.assertTrue(self.scheduler.state()['startupReconciled'])
 
     def test_symlink_schedule_is_preserved_without_reading_or_changing_target(self):
         external = Path(self.temp.name) / 'external'

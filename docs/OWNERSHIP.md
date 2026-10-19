@@ -77,9 +77,9 @@ Restoring project source does not restore an external database, reverse a migrat
 
 ## Agent proposal records
 
-Accepted Codex proposals place source changes and a record under `.unforge/proposals/{job-id}.json` in the working repository, staged but not yet committed. Save a version to include both in committed history and bundle exports. The record contains the request, base version, timing, provider, changed paths, and CLI exit code; it does not preserve raw logs or establish that tests passed.
+Accepted AI proposals place source changes and a record under `.unforge/proposals/{job-id}.json` in the working repository, staged but not yet committed. Save a version to include both in committed history and bundle exports. The record contains the request, base version, timing, provider, changed paths, and CLI exit code. A Fleet proposal also records the bounded author outcome, reviewer lane/outcome and attention notes, proof outcome, and explicit reviewer acknowledgment. The bounded reviewer narrative stays in local Unforge job history instead of entering project source. Reviewer testimony is not approval. The proposal record does not preserve raw provider logs, credentials, allowance snapshots, routing state, or proof that tests passed.
 
-Unaccepted proposals and raw output are held only in the current app session. Restarting discards them. Review or apply anything you want to retain before stopping the app. The source project is not changed by an unapplied proposal through the adapter. The separate operation ledger retains the attempt identity and recorded outcome; it is not a replacement for the lost proposal workspace. Reusing the same operation ID returns that history instead of automatically running the work again.
+Accepted and unaccepted proposals, requests, and bounded output persist in the local Unforge data home so review can continue after restart. The source project is not changed by an unapplied proposal. Pending proposals and uncertain outcomes are not automatically evicted or rerun. The separate operation ledger binds the attempt identity and payload; reusing the same operation ID returns that history instead of starting the work again. These local records may contain private project context and belong in encrypted workspace backups, not public source control.
 
 ## Leave without permission
 

@@ -35,12 +35,15 @@ import os
 from pathlib import Path
 import re
 import stat
+import shutil
 import tempfile
+import time
 import uuid
 
 from backups import (Backups, MAX_BYTES, MAX_FILES, STORAGE_METADATA_ALLOWANCE,
                      atomic, digest, estimated_workspace_storage, real_directory,
-                     regular_reader, stamp, storage_guard, sync_directory, sync_tree)
+                     regular_reader, stamp, storage_guard, sync_directory, sync_tree, fail_backup_walk)
+from backups import clone_capture_available, clone_file
 from engine import Problem
 
 HEX = r'[a-f0-9]{64}'
@@ -51,6 +54,13 @@ MAX_REPOSITORY_BYTES = 1024**4  # Explicit bound, not permission to consume this
 
 
 def _json(path):
+    path = Path(path)
+    try: info = path.lstat()
+    except OSError as error: raise Problem('Recovery metadata cannot be read safely: '+str(path)) from error
+    if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_INVENTORY_BYTES:
+        raise Problem('Recovery metadata must be an ordinary bounded file.')
+    if getattr(info,'st_flags',0) & 0x40000000:
+        storage_guard([(path.parent,info.st_size,'dataless recovery metadata read')])
     with regular_reader(path) as reader:
         raw = reader.read(MAX_INVENTORY_BYTES + 1)
     if len(raw) > MAX_INVENTORY_BYTES: raise Problem('Recovery metadata exceeds its supported size.')
@@ -85,6 +95,58 @@ def _lease(path):
 
 
 class IncrementalBackups:
+    @staticmethod
+    def retention_review(service, *, should_stop=None):
+        """Metadata-only inventory for an explicit whole-generation review.
+
+        This is not deletion authorization or independent recovery evidence.
+        In particular, individual shared packs are never pruning candidates.
+        """
+        def check():
+            if should_stop is not None and should_stop():
+                raise Problem('Private generation inventory is deferred during the active backup operation.')
+        check()
+        active = 'legacy'
+        pointer = service.root / 'incremental-active.json'
+        if pointer.exists() or pointer.is_symlink():
+            value = _json(pointer); active = value.get('generation')
+            if value.get('schema') != 1 or not isinstance(active, str) or not (active=='legacy' or re.fullmatch('[a-f0-9]{32}',active)):
+                raise Problem('Active writer identity needs review before retention can be considered.')
+        roots = [('legacy', service.root / 'incremental')]
+        generations = service.root / 'incremental-generations'
+        if generations.exists():
+            real_directory(generations)
+            roots += [(folder.name, folder) for folder in sorted(generations.iterdir()) if re.fullmatch('[a-f0-9]{32}', folder.name)]
+        result = []
+        for generation, root in roots:
+            check()
+            if not root.exists(): continue
+            real_directory(root)
+            repository = root / 'repository'
+            total = count = snapshots = 0
+            if repository.exists():
+                for parent, directories, names in os.walk(repository, followlinks=False, onerror=fail_backup_walk):
+                    check()
+                    real_directory(Path(parent))
+                    for name in directories:
+                        if (Path(parent) / name).is_symlink(): raise Problem('Private writer inventory does not follow links.')
+                    for name in names:
+                        check()
+                        with regular_reader(Path(parent) / name) as reader: info = os.fstat(reader.fileno())
+                        total += info.st_size; count += 1
+                        if count > MAX_FILES: raise Problem('Private writer inventory exceeds its supported limit.')
+                        if Path(parent).name == 'snapshots': snapshots += 1
+            seal = _json(root / 'SEALED.json') if (root / 'SEALED.json').exists() else None
+            result.append({'generation':generation, 'path':str(root), 'active':generation==active,
+                           'sealed':seal is not None, 'sealedAt':seal.get('sealedAt') if seal else None,
+                           'repositoryBytes':total, 'snapshots':snapshots,
+                           'reviewCandidate':seal is not None and generation!=active, 'deletionAvailable':False})
+        return {'automaticPruning':False, 'scope':'Whole sealed generations only; shared encrypted objects are never deleted individually.',
+                'requiredBeforeReclaim':['Verify an independent complete vault and its recovery passphrase.',
+                                        'Verify that retained points cover the required history and hosted data.',
+                                        'Review the exact whole generation and its writer dependencies.'],
+                'privateRepositoryBytes':sum(item['repositoryBytes'] for item in result), 'generations':result}
+
     def __init__(self, service, *, max_points=500, max_entries=4000):
         if type(max_points) is not int or not 1 <= max_points <= 500 or type(max_entries) is not int or not 1 <= max_entries <= 4000:
             raise Problem('Invalid incremental vault rollover limits.')
@@ -97,6 +159,8 @@ class IncrementalBackups:
         self.root = service.root / 'incremental'
         _mkdir(self.root)
         self.repository = self.root / 'repository'
+        self._hashes = {}
+        self._publication = None
 
     def _select_generation(self):
         if not self.pointer.exists() and not self.pointer.is_symlink():
@@ -117,7 +181,7 @@ class IncrementalBackups:
         result = set()
         if not root.exists(): return result
         real_directory(root)
-        for parent, dirs, files in os.walk(root, followlinks=False):
+        for parent, dirs, files in os.walk(root, followlinks=False, onerror=fail_backup_walk):
             real_directory(Path(parent))
             for name in dirs + files:
                 path = Path(parent) / name
@@ -207,12 +271,25 @@ class IncrementalBackups:
         return repository_id
 
     def _entry(self, path, relative):
-        with regular_reader(path) as reader: size = os.fstat(reader.fileno()).st_size
-        return {'path': relative, 'bytes': size, 'sha256': digest(path, self.service.closed)}
+        with regular_reader(path) as reader: info = os.fstat(reader.fileno())
+        fingerprint = [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+        cached = self._hashes.get(relative) if path.is_relative_to(self.repository) else None
+        checksum = cached.get('sha256') if isinstance(cached, dict) and cached.get('fingerprint') == fingerprint else None
+        if not isinstance(checksum, str) or not re.fullmatch(HEX, checksum): checksum = digest(path, self.service.closed)
+        after = path.stat(follow_symlinks=False)
+        if fingerprint != [after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns]:
+            raise Problem('An immutable encrypted object changed while being read.')
+        if path.is_relative_to(self.repository): self._hashes[relative] = {'fingerprint':fingerprint, 'sha256':checksum}
+        return {'path': relative, 'bytes': info.st_size, 'sha256': checksum}
 
     def _inventory(self, snapshot):
+        cache_path = self.root / 'object-hashes.json'
+        try:
+            cached = _json(cache_path)
+            self._hashes = cached.get('objects', {}) if cached.get('schema') == 1 and isinstance(cached.get('objects'), dict) else {}
+        except (OSError, ValueError): self._hashes = {}
         files = []
-        for parent, dirs, names in os.walk(self.repository, followlinks=False):
+        for parent, dirs, names in os.walk(self.repository, followlinks=False, onerror=fail_backup_walk):
             real_directory(Path(parent))
             if any((Path(parent) / name).is_symlink() for name in dirs):
                 raise Problem('Private Restic directories cannot be symbolic links.')
@@ -225,50 +302,247 @@ class IncrementalBackups:
                 files.append(self._entry(path, relative))
                 if len(files) > MAX_FILES: raise Problem('Recovery vault has too many encrypted objects.')
         files.append(self._entry(self.repository / 'snapshots' / snapshot, 'snapshots/' + snapshot))
+        atomic(cache_path, {'schema':1, 'objects':{item['path']:self._hashes[item['path']] for item in files}})
         return sorted(files, key=lambda item: item['path'])
 
-    def _validate_entry(self, root, entry):
+    def _validate_entry(self, root, entry, *, allow_hydration=True, metadata_retries=0):
         self._cancel()
         path = root / entry['path']
-        with regular_reader(path) as reader:
-            if os.fstat(reader.fileno()).st_size != entry['bytes']:
+        for attempt in range(metadata_retries + 1):
+            info = self._object_stat(path)
+            if self._dataless(info):
+                if not allow_hydration:
+                    raise Problem('An evicted destination object has no matching trusted identity. Verify the complete vault explicitly before retrying: '+entry['path'])
+                storage_guard([(path.parent,info.st_size,'encrypted object content hydration')])
+            with regular_reader(path) as reader:
+                info = os.fstat(reader.fileno())
+                if info.st_size != entry['bytes']:
+                    raise Problem('Recovery vault object is incomplete or damaged: ' + entry['path'])
+            fingerprint = self._fingerprint(info)
+            if digest(path, self.service.closed) != entry['sha256']:
                 raise Problem('Recovery vault object is incomplete or damaged: ' + entry['path'])
-        if digest(path, self.service.closed) != entry['sha256']:
-            raise Problem('Recovery vault object is incomplete or damaged: ' + entry['path'])
+            after = self._object_stat(path)
+            if fingerprint == self._fingerprint(after):
+                return fingerprint
+            # iCloud can alter ctime while adding upload metadata to a freshly
+            # installed object. Re-read materialized bytes; never waive the
+            # fingerprint check or open an evicted object during publication.
+            if attempt == metadata_retries:
+                raise Problem('Recovery vault object changed during verification: ' + entry['path'])
+
+    @staticmethod
+    def _object_stat(path):
+        # Opening a dataless iCloud object can request its entire contents.
+        # Routine publication checks identity without opening unchanged packs.
+        real_directory(path.parent)
+        try: info = path.lstat()
+        except OSError as error: raise Problem('Recovery object is missing or unreadable: '+str(path)) from error
+        if not stat.S_ISREG(info.st_mode): raise Problem('Recovery objects must be ordinary immutable files.')
+        return info
+
+    @staticmethod
+    def _dataless(info):
+        # Darwin sys/stat.h: SF_DATALESS, an evicted file-provider object.
+        return bool(getattr(info, 'st_flags', 0) & 0x40000000)
+
+    @staticmethod
+    def _fingerprint(info):
+        return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
+
+    def _publication_evidence(self, vault, descriptor):
+        """Private identity evidence for append-only destination publication.
+
+        This is not a fresh read of existing ciphertext or a cloud receipt.
+        Restore and explicit inspect always perform independent content reads.
+        """
+        cache = self.root / ('publication-' + hashlib.sha256(os.fsencode(vault)).hexdigest() + '.json')
+        context = {'cache':cache, 'repository':vault/'repository', 'prior':{}, 'legacy':{}, 'observed':{},
+                   'verification':{'method':'append-only-publication', 'newObjectsContentVerified':0,
+                     'newBytesContentVerified':0, 'reusedObjectsMetadataChecked':0, 'reusedBytesMetadataChecked':0,
+                     'existingObjectsContentReverified':0, 'existingBytesContentReverified':0,
+                     'legacyObjectsMetadataMigrated':0, 'reusedContentReread':False,
+                     'unchangedReusedContentReread':False,
+                     'identityCheckedAt':stamp(), 'cloudUploadVerified':False,
+                     'scope':'New objects are read back. Unchanged reused objects retain prior publication evidence and are checked by file identity; their contents are not reread. Explicit recovery inspection reads every object.'}}
+        if cache.exists() or cache.is_symlink():
+            value = _json(cache)
+            if (value.get('schema') != 1 or value.get('vaultPath') != str(vault)
+                    or value.get('repositoryId') != descriptor['repositoryId'] or value.get('writerId') != descriptor['writerId']
+                    or not isinstance(value.get('objects'), dict) or len(value['objects']) > MAX_FILES):
+                raise Problem('Destination publication evidence is invalid. Existing vaults were not changed.')
+            for name, entry in value['objects'].items():
+                fingerprint = entry.get('fingerprint') if isinstance(entry, dict) else None
+                if (not isinstance(name, str) or not (OBJECT.fullmatch(name) or re.fullmatch('snapshots/'+HEX,name))
+                        or not isinstance(fingerprint, list) or len(fingerprint) != 5
+                        or any(type(number) is not int or number < 0 for number in fingerprint)
+                        or type(entry.get('bytes')) is not int or entry['bytes'] != fingerprint[2]
+                        or not isinstance(entry.get('sha256'), str) or not re.fullmatch(HEX,entry['sha256'])
+                        or entry.get('evidence') not in ('content-readback','legacy-completed-point-metadata')
+                        or any(entry.get(field) is not None and (not isinstance(entry[field],str) or len(entry[field])>80)
+                               for field in ('digestVerifiedAt','identityCheckedAt'))):
+                    raise Problem('Destination publication evidence is damaged. Use explicit recovery inspection before repairing it.')
+            context['prior'] = value['objects']
+            return context
+        # The first upgrade has no historical filesystem fingerprints. Seed only
+        # from a completed, matching destination point, and label this weaker
+        # metadata migration explicitly instead of inventing a fresh hash proof.
+        with self.service.lock: jobs = list(self.service.jobs.values())
+        candidates = sorted((job for job in jobs if job.get('state') == 'completed'
+            and job.get('repositoryId') == descriptor['repositoryId']
+            and (job.get('restoredLocally') or job.get('verifiedLocally'))),
+            key=lambda job:job.get('finishedAt',''), reverse=True)
+        for job in candidates:
+            destination = next((item for item in job.get('destinations',[]) if item.get('vaultPath') == str(vault)
+                and item.get('backupPath') == str(vault/'points'/(job['id']+'.ufpoint'))), None)
+            if not destination: continue
+            point = Path(destination['backupPath'])
+            for metadata in (vault/'VAULT.json',point/'POINT.json'):
+                info = self._object_stat(metadata)
+                if self._dataless(info): storage_guard([(metadata.parent,info.st_size,'completed publication metadata')])
+            previous = self.inspect(str(point), verify=False)
+            if previous['repositoryId'] != descriptor['repositoryId'] or previous['writerId'] != descriptor['writerId']:
+                raise Problem('Completed destination point belongs to a different writer.')
+            context['legacy'] = {entry['path']:entry for entry in previous['files']}
+            context['verification']['legacyBaselinePointId'] = previous['pointId']
+            break
+        return context
+
+    def _publication_known(self, path):
+        if self._publication is None: return None, None
+        try: relative = path.relative_to(self._publication['repository']).as_posix()
+        except ValueError: return None, None
+        known = self._publication['prior'].get(relative) or self._publication['legacy'].get(relative)
+        return relative, known
+
+    def _publication_check(self, path, entry, *, created=False, recheck=False):
+        relative, known = self._publication_known(path)
+        if relative is None:
+            self._validate_entry(path.parent, {**entry,'path':path.name}); return
+        context = self._publication; verification = context['verification']
+        if recheck: known = context['observed'].get(relative)
+        info = self._object_stat(path)
+        if info.st_size != entry['bytes'] or (known and (known['bytes'] != entry['bytes'] or known['sha256'] != entry['sha256'])):
+            raise Problem('Immutable destination object metadata changed: '+relative)
+        fingerprint = self._fingerprint(info)
+        if known and known.get('fingerprint') == fingerprint:
+            evidence = known['evidence']
+            digest_at = known.get('digestVerifiedAt')
+            verification['reusedObjectsMetadataChecked'] += 1
+            verification['reusedBytesMetadataChecked'] += entry['bytes']
+        elif known and 'fingerprint' not in known:
+            evidence = 'legacy-completed-point-metadata'
+            digest_at = None
+            verification['legacyObjectsMetadataMigrated'] += 1
+            verification['reusedObjectsMetadataChecked'] += 1
+            verification['reusedBytesMetadataChecked'] += entry['bytes']
+        else:
+            if not created and self._dataless(info):
+                raise Problem('An evicted destination object has no matching trusted identity. Verify the complete vault explicitly before retrying: '+relative)
+            fingerprint = self._validate_entry(path.parent, {**entry,'path':path.name},
+                                               allow_hydration=False, metadata_retries=2)
+            evidence = 'content-readback'
+            if created:
+                verification['newObjectsContentVerified'] += 1
+                verification['newBytesContentVerified'] += entry['bytes']
+            else:
+                verification['existingObjectsContentReverified'] += 1
+                verification['existingBytesContentReverified'] += entry['bytes']
+                verification['reusedContentReread'] = True
+            digest_at = stamp(); verification['digestVerifiedAt'] = digest_at
+        context['observed'][relative] = {'bytes':entry['bytes'],'sha256':entry['sha256'],
+                                        'fingerprint':fingerprint,'evidence':evidence,
+                                        'digestVerifiedAt':digest_at,'identityCheckedAt':stamp()}
+
+    def _checkpoint_publication(self, vault, descriptor, *, point_published=False):
+        # This private ledger records per-object evidence, not a completed point.
+        # Preserve verified new objects if final metadata checks or promotion fail.
+        # Future reuse still requires the entire stored fingerprint to match.
+        atomic(self._publication['cache'], {'schema':1,'vaultPath':str(vault),
+            'repositoryId':descriptor['repositoryId'],'writerId':descriptor['writerId'],
+            'pointId':descriptor['pointId'],'identityCheckedAt':stamp(),
+            'publicationState':'point-published' if point_published else 'objects-verified',
+            'objects':self._publication['observed']})
+
+    def _finish_publication_inventory(self, repository):
+        # File-provider upload attributes may change between the initial object
+        # readback and point publication. A bounded independent re-read of any
+        # changed materialized object preserves tamper detection without
+        # hydrating unchanged or newly evicted ciphertext.
+        for attempt in range(3):
+            changed = []
+            for name, entry in self._publication['observed'].items():
+                if self._fingerprint(self._object_stat(repository/name)) != entry['fingerprint']:
+                    changed.append((name, entry))
+            if not changed: return
+            if attempt == 2:
+                raise Problem('Destination object identity kept changing during publication: '+changed[0][0])
+            for name, entry in changed:
+                self._publication_check(repository/name, entry, recheck=True)
 
     def _install(self, source, target, entry):
         """Write once: never replace an existing encrypted object, even on retry."""
         self._cancel()
         _mkdir(target.parent)
         if target.exists() or target.is_symlink():
-            self._validate_entry(target.parent, {**entry, 'path': target.name})
+            self._publication_check(target, entry)
             return False
+        relative, known = self._publication_known(target)
+        if known: raise Problem('A previously published recovery object is missing: '+relative)
+        clone = bool(self._publication and self._publication.get('clonePublication'))
+        storage_guard([(target.parent,4096 if clone else entry['bytes']+4096,'new encrypted destination object')])
         fd, temporary = tempfile.mkstemp(prefix='.incoming-', dir=target.parent)
+        os.close(fd); os.unlink(temporary)
+        cloned = False
         try:
-            checksum = hashlib.sha256(); size = 0
-            with os.fdopen(fd, 'wb') as out, regular_reader(source) as reader:
-                while True:
-                    self._cancel()
-                    chunk = reader.read(1024 * 1024)
-                    if not chunk: break
-                    size += len(chunk); checksum.update(chunk); out.write(chunk)
-                out.flush(); os.fsync(out.fileno())
-            if size != entry['bytes'] or checksum.hexdigest() != entry['sha256']:
-                raise Problem('Encrypted source changed during publication.')
+            self._object_stat(source)
+            if clone:
+                try: cloned = clone_file(source, Path(temporary))
+                except OSError as error:
+                    if error.errno not in (errno.EPERM,errno.EXDEV,errno.ENOTSUP,errno.EOPNOTSUPP): raise
+            if cloned:
+                # Match ordinary-copy private permissions, independent of the
+                # writer's read-only mode, and validate before immutable install.
+                with regular_reader(Path(temporary)) as reader:
+                    os.fchmod(reader.fileno(),0o600); os.fsync(reader.fileno())
+                self._validate_entry(Path(temporary).parent,{**entry,'path':Path(temporary).name},
+                                     allow_hydration=False,metadata_retries=2)
+            else:
+                # Capability can vary by object. A failed clone must pass the
+                # full allocation guard before the ordinary-copy fallback.
+                storage_guard([(target.parent,entry['bytes']+4096,'encrypted destination clone fallback')])
+                fd = os.open(temporary, os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW, 0o600)
+                checksum = hashlib.sha256(); size = 0
+                with os.fdopen(fd, 'wb') as out, regular_reader(source) as reader:
+                    while True:
+                        self._cancel()
+                        storage_guard([(target.parent,max(0,entry['bytes']-size)+4096,'new encrypted destination object')])
+                        chunk = reader.read(1024 * 1024)
+                        if not chunk: break
+                        size += len(chunk); checksum.update(chunk); out.write(chunk)
+                    out.flush(); os.fsync(out.fileno())
+                if size != entry['bytes'] or checksum.hexdigest() != entry['sha256']:
+                    raise Problem('Encrypted source changed during publication.')
             # link is an atomic no-replace installation, unlike rename/replace.
             try: os.link(temporary, target, follow_symlinks=False)
             except FileExistsError:
-                self._validate_entry(target.parent, {**entry, 'path': target.name})
+                self._publication_check(target, entry)
                 return False
             except OSError as error:
                 if error.errno in (errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.ENOTSUP):
                     raise Problem('This destination cannot atomically publish immutable backup objects. Choose an APFS folder or another filesystem with hard-link support.') from error
                 raise
             sync_directory(target.parent)
-            return True
         finally:
-            os.unlink(temporary)
+            if os.path.exists(temporary): os.unlink(temporary)
             sync_directory(target.parent)
+        # Removing the temporary hard link changes ctime. Record the final
+        # installed identity only after that owned staging link is gone.
+        self._publication_check(target, entry, created=True)
+        if self._publication is not None:
+            allocation = self._publication.setdefault('allocation',{'objectsCloned':0,'bytesCloned':0,'objectsCopied':0,'bytesCopied':0})
+            method = 'Cloned' if cloned else 'Copied'
+            allocation['objects'+method] += 1; allocation['bytes'+method] += entry['bytes']
+        return True
 
     def _write_once(self, target, value):
         with tempfile.TemporaryDirectory(prefix='metadata-', dir=self.root) as tmp:
@@ -276,6 +550,11 @@ class IncrementalBackups:
             return self._install(source, target, self._entry(source, target.name))
 
     def _publish(self, destination, descriptor):
+        self._publication = None
+        try: return self._publish_append_only(destination, descriptor)
+        finally: self._publication = None
+
+    def _publish_append_only(self, destination, descriptor):
         parent = Path(destination['path'])
         real_directory(parent)
         vault = parent / ('unforge-' + descriptor['repositoryId'] + '.ufvault')
@@ -291,6 +570,8 @@ class IncrementalBackups:
             points = vault / 'points'; _mkdir(points)
             point = points / (descriptor['pointId'] + '.ufpoint')
             if point.exists() or point.is_symlink(): raise Problem('A recovery point with this identifier already exists.')
+            self._publication = self._publication_evidence(vault, descriptor)
+            self._publication['clonePublication'] = clone_capture_available(self.repository, parent)
             # Count both files and directories, including prior point descriptors.
             # A single unusually large snapshot may cross a limit even in a fresh
             # generation; reject it before publishing objects, never claim proof.
@@ -302,8 +583,10 @@ class IncrementalBackups:
             projected.update({'points/' + point.name, 'points/' + point.name + '/POINT.json'})
             if len(projected) > MAX_VAULT_ENTRIES:
                 raise Problem('This snapshot would exceed the supported recovery-vault entry limit. No recovery point was published; earlier vaults remain available.')
-            missing = sum(entry['bytes'] + 4096 for entry in descriptor['files'] if not (repository / entry['path']).exists())
-            storage_guard([(parent, missing + STORAGE_METADATA_ALLOWANCE, 'incremental encrypted publication')])
+            missing = [entry for entry in descriptor['files'] if not (repository / entry['path']).exists()]
+            logical_missing = sum(entry['bytes'] for entry in missing)
+            allocated_missing = 4096*len(missing) + (0 if self._publication['clonePublication'] else logical_missing)
+            plan = storage_guard([(parent, allocated_missing + STORAGE_METADATA_ALLOWANCE, 'append-only encrypted publication; unchanged reused packs are not hydrated')])
             added, reused = 0, 0
             # Snapshot commit marker is published only after its packs and indexes.
             ordered = sorted(descriptor['files'], key=lambda item: (item['path'].startswith('snapshots/'), item['path'].startswith('index/'), item['path']))
@@ -311,6 +594,7 @@ class IncrementalBackups:
                 created = self._install(self.repository / entry['path'], repository / entry['path'], entry)
                 if created: added += entry['bytes']
                 else: reused += entry['bytes']
+            self._checkpoint_publication(vault,descriptor)
             final_descriptor = {**descriptor, 'vaultIdentitySha256': digest(vault / 'VAULT.json', self.service.closed)}
             with tempfile.TemporaryDirectory(prefix='.pending-point-', dir=points) as tmp:
                 staged = Path(tmp) / point.name; staged.mkdir(mode=0o700)
@@ -318,23 +602,40 @@ class IncrementalBackups:
                 sync_tree(staged)
                 self._cancel()
                 real_directory(points)
+                self._finish_publication_inventory(repository)
                 if point.exists() or point.is_symlink(): raise Problem('Recovery point collision; existing point was preserved.')
                 os.rename(staged, point)
                 sync_directory(points)
-            # Post-promotion readback covers every object required by this point.
-            self.inspect(point)
+            self.inspect(point, verify=False)
+            verification = self._publication['verification']
+            verification['legacyMetadataOnlyObjects'] = sum(entry['evidence']=='legacy-completed-point-metadata'
+                                                           for entry in self._publication['observed'].values())
+            self._checkpoint_publication(vault,descriptor,point_published=True)
             metadata_bytes = (point / 'POINT.json').stat().st_size
             if identity_added: metadata_bytes += (vault / 'VAULT.json').stat().st_size
             return {**destination, 'backupPath': str(point), 'vaultPath': str(vault),
                     'state': 'upload_pending' if destination.get('kind') in ('icloud', 'drive') else 'copied_locally',
                     'format': 'incremental-v2', 'readbackAt': stamp(), 'addedBytes': added + metadata_bytes,
                     'objectBytesAdded': added, 'metadataBytesAdded': metadata_bytes, 'reusedBytes': reused,
+                    'publicationVerification':dict(verification),
+                    'publicationAllocation':dict(self._publication.get('allocation',{})),
+                    'storagePlan':[{'phase':'publication','clonePublication':self._publication['clonePublication'],
+                        'logicalBytesToPublish':logical_missing,**item} for item in plan],
                     'vaultEntries': len(projected), 'vaultEntryLimit': MAX_VAULT_ENTRIES}
 
     def backup(self, job, destinations=None):
         """Called by Backups' owned worker. Failures persist and never prune points."""
         s = self.service
         self.rollover = None
+        job['phaseDurationsSeconds'] = {}
+        phase_started = time.monotonic()
+        phase_name = 'prepare'
+        def phase(name, description):
+            nonlocal phase_started, phase_name
+            current = time.monotonic()
+            job['phaseDurationsSeconds'][phase_name] = round(current - phase_started, 3)
+            phase_name, phase_started = name, current
+            job['phase'] = description; s._record(job)
         try:
             if not re.fullmatch(r'[a-f0-9]{32}', str(job.get('id', ''))): raise Problem('Invalid recovery point identifier.')
             with self._writer():
@@ -349,41 +650,82 @@ class IncrementalBackups:
                 if self.rollover: job['vaultRollover'] = dict(self.rollover)
                 job.update(format='incremental-v2', repositoryId=repository_id, destinations=[], phase='Capturing workspace for incremental backup')
                 s._record(job)
-                def capacity_check(listing):
-                    estimate = estimated_workspace_storage(listing)
-                    job['storagePlan'] = storage_guard([(self.root, estimate * 4, 'source capture, new encrypted data, and recovery verification')])
+                previous = {}
+                candidates = sorted((receipt for receipt in s.jobs.values() if receipt.get('state') == 'completed'
+                    and receipt.get('repositoryId') == repository_id and (receipt.get('restoredLocally') or receipt.get('verifiedLocally'))),
+                    key=lambda receipt:receipt.get('finishedAt',''), reverse=True)
+                if candidates:
+                    latest = candidates[0]
+                    def read_manifest(reader):
+                        data = reader.read(64 * 1024**2 + 1)
+                        if len(data) > 64 * 1024**2: raise Problem('Prior snapshot inventory exceeds its size limit.')
+                        value = json.loads(data)
+                        if not isinstance(value, dict) or not isinstance(value.get('files'), list): raise Problem('Prior snapshot inventory is invalid.')
+                        return {item['path']:item for item in value['files']}
+                    previous = s._stream_command(self.repository, s.key_path, read_manifest,
+                        'dump', latest['snapshotId'], '/workspace/UNFORGE-RECOVERY.json')
                 with tempfile.TemporaryDirectory(prefix='snapshot-', dir=self.root) as tmp:
                     temp = Path(tmp); workspace = temp / 'workspace'; workspace.mkdir()
-                    with s.engine.lock: manifest = s._copy_workspace(workspace, capacity_check=capacity_check)
+                    clones = clone_capture_available(s.engine.home, temp)
+                    def capacity_check(listing):
+                        estimate = estimated_workspace_storage(listing)
+                        # Clones share source blocks; SQLite still uses an online
+                        # copied snapshot. Unsupported individual clones check
+                        # full-copy capacity before allocating their bytes.
+                        required = STORAGE_METADATA_ALLOWANCE + len(listing) * 4096 if clones else estimate
+                        job['storagePlan'] = [{'phase':'capture', **plan} for plan in storage_guard([
+                            (self.root, required, 'local source capture')])]
+                    phase('capture', 'Capturing a consistent workspace')
+                    with s.engine.lock: manifest = s._copy_workspace(workspace, capacity_check=capacity_check, clone_capture=clones)
+                    job['capture'] = manifest['capture']
                     manifest['incrementalPoint'] = {'pointId': job['id'], 'repositoryId': repository_id}
                     atomic(workspace / 'UNFORGE-RECOVERY.json', manifest)
                     manifest_hash = digest(workspace / 'UNFORGE-RECOVERY.json', s.closed)
+                    changed = [entry for entry in manifest['files'] if previous.get(entry['path'], {}).get('sha256') != entry['sha256']]
+                    changed_bytes = sum(entry['bytes'] for entry in changed)
+                    # Restic never needs more new file data than all changed
+                    # files. Bound encryption framing/tree/index/pack overhead;
+                    # existing staged allocation is already in available space.
+                    additional = changed_bytes + max(STORAGE_METADATA_ALLOWANCE, changed_bytes // 10) + len(manifest['files']) * 4096 + (workspace / 'UNFORGE-RECOVERY.json').stat().st_size
+                    job['storagePlan'] += [{'phase':'encryption', **plan} for plan in storage_guard([
+                        (self.root, additional, 'new encrypted snapshot data in the private writer')])]
+                    job['changedSourceBytes'] = changed_bytes
+                    phase('encrypt', 'Saving an immutable encrypted snapshot')
                     output = s._command(self.repository, s.key_path, 'backup', '--force', '--host', 'unforge', '--tag', job['id'], 'workspace', cwd=temp)
                     summaries = [json.loads(line) for line in output.splitlines() if line.strip()]
                     snapshot = next((row.get('snapshot_id') for row in reversed(summaries) if row.get('message_type') == 'summary'), None)
                     if not isinstance(snapshot, str) or not re.fullmatch(HEX, snapshot):
                         raise Problem('Restic did not return an exact completed snapshot identifier.')
-                    job.update(snapshotId=snapshot, phase='Restoring this exact snapshot to verify every file'); s._record(job)
-                    s._command(self.repository, s.key_path, '--no-lock', 'restore', snapshot, '--target', str(temp / 'verification'))
-                    verified = temp / 'verification/workspace'
-                    s.verify_workspace(verified, s.closed)
-                    if digest(verified / 'UNFORGE-RECOVERY.json', s.closed) != manifest_hash:
-                        raise Problem('Restored workspace manifest differs from the captured workspace.')
-                    # Flush the local writer before any destination publication.
+                    job.update(snapshotId=snapshot)
+                    # After the exact encrypted snapshot is durable, its private
+                    # scratch capture is no longer needed. No user data is removed.
                     sync_tree(self.repository)
+                    shutil.rmtree(workspace)
+                    phase('verify', 'Reading back every file from this exact encrypted snapshot')
+                    s._stream_command(self.repository, s.key_path,
+                        lambda reader:s.verify_workspace_stream(reader, manifest, manifest_hash, s.closed),
+                        'dump', snapshot + ':/workspace', '/')
+                    job.update(verifiedLocally=True, restoredLocally=False,
+                        verification={'method':'exact-snapshot-stream','snapshotId':snapshot,'allFileHashesVerified':True,
+                                      'sqliteIntegrityCheckedDuringCapture':True,'plaintextRestoreAllocated':False})
+                    phase('inventory', 'Checking immutable encrypted objects')
                     descriptor = {'schema': 2, 'format': 'unforge-incremental-restic', 'pointId': job['id'],
                                   'writerId': writer, 'repositoryId': repository_id, 'snapshotId': snapshot,
                                   'createdAt': job['createdAt'], 'workspaceManifestSha256': manifest_hash,
                                   'sourceBytes': manifest['sourceBytes'], 'fileCount': manifest['fileCount'],
                                   'files': self._inventory(snapshot)}
+                    phase('publish', 'Publishing the verified recovery point')
                     for destination in destinations:
-                        job['destinations'].append(self._publish(destination, descriptor)); s._record(job)
+                        published = self._publish(destination, descriptor)
+                        job['destinations'].append(published)
+                        job['storagePlan'] += published['storagePlan']; s._record(job)
                     job.update(state='completed', phase='Incremental encrypted recovery point verified locally', finishedAt=stamp(),
                                files=manifest['fileCount'], bytes=manifest['sourceBytes'], excludedCount=len(manifest['excluded']),
-                               restoredLocally=True, addedBytes=sum(d['addedBytes'] for d in job['destinations']),
+                               addedBytes=sum(d['addedBytes'] for d in job['destinations']),
                                reusedBytes=sum(d['reusedBytes'] for d in job['destinations']))
         except Exception as error:
             job.update(state='failed', error=str(error), finishedAt=stamp())
+        job['phaseDurationsSeconds'][phase_name] = round(time.monotonic() - phase_started, 3)
         s._record(job)
         return dict(job)
 
@@ -447,7 +789,7 @@ class IncrementalBackups:
     def restore(self, path, password, destination):
         s = self.service
         with s.lock:
-            if s.worker and s.worker.is_alive(): raise Problem('Wait for the current backup operation.')
+            if s._operation_active(): raise Problem('Wait for the current backup operation.')
             inspection = self.inspect(path)
             target = Path(destination).expanduser()
             if not target.is_absolute(): raise Problem('Choose an absolute recovery folder.')
@@ -485,11 +827,14 @@ class IncrementalBackups:
                 for entry in inspection['files']: self._validate_entry(view, entry)
                 after = self.inspect(path)
                 if after != inspection: raise Problem('Recovery point changed during restore.')
+                from recovery_links import normalize_recovered_workspace
+                recovery_links=normalize_recovered_workspace(workspace,target)
                 sync_tree(workspace); real_directory(target.parent)
                 if target.exists() or target.is_symlink(): raise Problem('Recovery destination was created by another operation.')
                 os.rename(workspace, target); sync_directory(target.parent)
-            result = {'path': str(target), 'files': manifest['fileCount'], 'restoredAt': stamp(), 'state': 'restored',
+            result = {'path': str(target), 'files': recovery_links['restoredFileCount'],'capturedFiles':manifest['fileCount'], 'restoredAt': stamp(), 'state': 'restored',
                       'format': 'incremental-v2', 'snapshotId': inspection['snapshotId'], 'pointId': inspection['pointId'],
-                      'applicationsStarted': False, 'externalData': manifest['externalData'], 'excluded': manifest['excluded']}
+                      'applicationsStarted': False, 'externalData': manifest['externalData'], 'excluded': manifest['excluded'],
+                      'recoveryLinks':recovery_links}
             atomic(s.root / ('restore-' + uuid.uuid4().hex + '.json'), result)
             return result

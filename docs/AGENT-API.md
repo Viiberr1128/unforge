@@ -1,6 +1,6 @@
-# Local tools and optional Codex proposals
+# Local tools and optional AI proposals
 
-Unforge exposes a local HTTP API and a Python command-line client. Both use the same engine as the interface. The project API needs no hosted account. The optional Codex adapter invokes an existing configured CLI only when requested; it uses that account's allowance or charges. No provider account is created and deployment is not implemented.
+Unforge exposes a local HTTP API and a Python command-line client. Both use the same engine as the interface. The project API needs no hosted account. Optional Codex and Subscription Fleet adapters invoke existing configured local tools only when requested; they use those accounts' allowances or charges. No provider account is created and deployment is not implemented.
 
 Start `./start.sh`. From another terminal (or your coding agent), run:
 
@@ -142,41 +142,55 @@ An operation ID binds one project, kind, and payload hash. Replaying it returns 
 4. Run appropriate checks through your existing authorized tool environment. There is deliberately no arbitrary shell-execution API.
 5. Inspect the diff, save a descriptive version, and explain the actual validation performed.
 
-Requests are UTF-8 Markdown under `.unforge/requests/`. They are committed and exported only when a version is saved. Recording a request does not schedule, assign, execute, or mark it complete. Optional Codex jobs are a separate explicit action. Agents with filesystem access can operate on the ordinary Git repository independently of this API.
+Requests are UTF-8 Markdown under `.unforge/requests/`. They are committed and exported only when a version is saved. Recording a request does not schedule, assign, execute, or mark it complete. Optional AI jobs are a separate explicit action. Agents with filesystem access can operate on the ordinary Git repository independently of this API.
 
-## Optional Codex job API
+## Optional AI job API
 
-Use an installed Codex CLI already configured with an account and supporting the invocation flags below. CLI presence alone does not establish flag compatibility; an incompatible version will fail the job and its output will explain the error. No model plugin is required. Status checks only locate the executable; they do not verify authentication.
+Use an installed Codex CLI already configured with an account, or a separately installed Subscription Fleet. Executable presence alone does not establish authentication or protocol compatibility. An incompatible tool fails the job and retains bounded output. No provider account or API key is configured through Unforge.
 
 ```sh
 python3 unforge.py agent-status
+python3 unforge.py agent-plan PROJECT_ID --from-file outcome.md
+python3 unforge.py agent-start-plan PROJECT_ID PLAN_ID --operation-id my-planned-request-1
 python3 unforge.py agent-start PROJECT_ID --from-file request.md --operation-id my-request-1
+python3 unforge.py agent-start PROJECT_ID --provider subscription-fleet --from-file request.md --acceptance-file acceptance.md --allow-path src/example.js --allow-path src/example.test.js --size medium --operation-id my-request-2
 python3 unforge.py agent-show JOB_ID
 python3 unforge.py agent-consequences JOB_ID
 python3 unforge.py agent-cancel JOB_ID
-python3 unforge.py agent-apply JOB_ID
+python3 unforge.py agent-apply JOB_ID --review-acknowledged
+python3 unforge.py agent-reject JOB_ID
+python3 unforge.py agent-recover JOB_ID
 ```
 
 | Request | Body | Result |
 | --- | --- | --- |
-| `GET /api/agent/status` | — | CLI availability, active job, recent job summaries, limits, authentication caveat |
-| `POST /api/agent/jobs` | `{ "projectId", "request", "operationId"? }` | Start an isolated proposal through the shared allowance ledger |
+| `GET /api/agent/status` | — | Sanitized provider readiness, active job, recent job summaries, and authentication caveat |
+| `POST /api/agent/plans` | `{ "projectId", "outcome" }` | Read-only plan bound to the exact saved base, with exact files and an optional trusted focused check |
+| `GET /api/agent/plans/{id}` | — | Retrieve the checksum-protected saved plan |
+| `POST /api/agent/jobs` | `{ "projectId", "request", "operationId"?, "provider"?, "fleet"? }` | Start an isolated proposal through the shared allowance ledger |
+| `POST /api/agent/jobs` | `{ "projectId", "planId", "operationId" }` | Start the exact server-held plan after rechecking its project and base |
 | `GET /api/agent/jobs/{id}` | — | Current status, output, diff, and changed files |
 | `GET /api/agent/jobs/{id}/consequences` | — | Compare the server-held proposal diff with current source configuration |
 | `POST /api/agent/jobs/{id}/cancel` | `{}` | Request cancellation |
-| `POST /api/agent/jobs/{id}/apply` | `{}` | Apply the proposal and return project detail |
+| `POST /api/agent/jobs/{id}/apply` | `{ "reviewAcknowledged": true }` for reviewed Fleet work; otherwise `{}` | Apply the proposal and return project detail |
+| `POST /api/agent/jobs/{id}/reject` | `{}` | Discard a completed Fleet proposal and record bounded calibration feedback |
+| `POST /api/agent/jobs/{id}/recover` | `{}` | Retrieve only the exact already-durable Fleet result; never launch a provider |
 
 All mutations use the same local session token, exact Origin, and JSON content type described above. Starting requires a clean source project. Applying requires a completed proposal with changes and the original clean base version. Accepted changes and metadata are staged; a separate save creates a version.
 
-Clients should generate and retain one `operationId` for each intentional request, and reuse it if the start response is lost. Omitting it creates a fresh operation; clients cannot safely infer whether an earlier request ran from a network error alone. Durable ledger records remain after session-only proposal workspaces disappear. An unknown outcome requires reconciliation, not a blind retry with a new ID.
+Clients should generate and retain one `operationId` for each intentional request, and reuse it if the start response is lost. Omitting it creates a fresh operation; clients cannot safely infer whether an earlier request ran from a network error alone. Durable job and ledger records survive restart. An interrupted attempt becomes unknown and requires reconciliation, not a blind retry with a new ID.
 
 The CLI generates an ID when `--operation-id` is omitted and prints that ID as JSON to stderr before the request, even on success. It includes the ID again in a request error so the caller can retry with the same binding. HTTP clients must retain their own ID before sending.
 
-Execution uses `codex --ask-for-approval never exec --sandbox workspace-write --json --ephemeral --ignore-user-config --ignore-rules --cd <temporary-checkout> -`. `--ignore-user-config` skips user configuration and `--ignore-rules` skips execpolicy rules. A project containing a root `.codex/config.toml` (case-insensitive path match) is rejected before execution. These controls do not establish that all plugins or hooks are disabled. The sandbox is the CLI's mechanism, not a claim of complete system containment. The prompt directs the agent to prepare source changes without committing, publishing, deploying, contacting people, provisioning services, or automatically installing dependencies.
+Codex execution uses `codex --ask-for-approval never exec --sandbox workspace-write --json --ephemeral --ignore-user-config --ignore-rules --cd <temporary-checkout> -`. `--ignore-user-config` skips user configuration and `--ignore-rules` skips execpolicy rules. A project containing a root `.codex/config.toml` (case-insensitive path match) is rejected before execution. These controls do not establish that all plugins or hooks are disabled. The sandbox is the CLI's mechanism, not a claim of complete system containment. The prompt directs the agent to prepare source changes without committing, publishing, deploying, contacting people, provisioning services, or automatically installing dependencies.
 
-Operational bounds are one active job per OS user, a 15-minute timeout, 128 KiB retained output, 128 KiB per changed UTF-8 text file, and a 512 KiB patch. At most 32 jobs are retained per app session. These limits do not enforce a dollar spending cap. Optional execution can communicate with the configured provider.
+Fleet execution uses Bridge Protocol v2. The request binds the operation ID, isolated repository, exact base, source-only classification, task class, bounded context, objective, acceptance criteria, and one to eight exact files. An optional check includes its graph path and digest, job ID, argv and digest, and timeout; Fleet independently resolves the same root check from `.unforge/app.json` at the exact base before execution. Sanitized progress comes from wrapper state, not provider narration. The candidate binds the request and check digests and contains a bounded UTF-8 patch, sanitized author outcome, bounded reviewer report labeled `completed-uninterpreted`, proof status, and the integration boundary. Unforge rejects identity, digest, binary, size, history, metadata, or file-scope mismatches, reconstructs the candidate independently, and materializes an Unforge lane. Applying or rejecting records exact calibration feedback through `fleet bridge finalize`; it does not claim integration or release. The bridge cannot publish, deploy, contact people, provision services, enable paid fallback, or create a daemon.
 
-Unaccepted proposals and logs are session-only and disappear on restart. Applied metadata persists under `.unforge/proposals/` and omits raw logs. A successful CLI exit is not evidence that tests passed or that a deployment occurred. Automated tests use a fake executable for controlled failure and cancellation coverage. One live Codex smoke test completed a specified README edit in a disposable project: the original stayed unchanged until explicit apply, and a saved bundle cloned with the edit and proposal metadata. This is limited integration evidence, not a general AI-quality or deployment guarantee.
+If Unforge stops after Fleet durably stored a result, `POST /api/agent/jobs/{id}/recover` (or `agent-recover`) asks `fleet bridge recover` for only the original operation, base, and request checksum. This path never launches a provider or reserves another local attempt. It reconstructs and verifies the proposal again before making it reviewable. Missing, mismatched, active, or non-durable results remain unknown.
+
+Operational bounds are one active job per OS user, 128 KiB retained output, 128 KiB per changed UTF-8 text file, and a 512 KiB patch. Codex has a 15-minute outer timeout. Fleet has a 12-hour outer timeout while its provider lanes retain their own shorter configured limits and supervision. Up to 200 bounded job records using at most 128 MiB are retained; pending proposals and unknown outcomes are never evicted automatically. These limits do not enforce a dollar spending cap. Optional execution can communicate with configured providers.
+
+Accepted and unaccepted proposal records, requests, and bounded output persist locally under `.agent-jobs`; accepted metadata also persists under `.unforge/proposals/` and omits raw logs. Fleet credentials, allowance snapshots, raw provider logs, private recipes, and routing state are not copied into the project record or public source. A successful CLI exit is not evidence that tests passed or that a deployment occurred. Automated tests use fake executables for controlled protocol, failure, idempotency, scope, and cancellation coverage. One live Codex smoke test completed a specified README edit in a disposable project: the original stayed unchanged until explicit apply, and a saved bundle cloned with the edit and proposal metadata. This is limited integration evidence, not a general AI-quality or deployment guarantee.
 
 ## Workspace ownership API
 

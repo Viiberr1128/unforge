@@ -60,7 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         window.contentView = container
         container.addSubview(web)
         NSLayoutConstraint.activate([web.leadingAnchor.constraint(equalTo: container.leadingAnchor), web.trailingAnchor.constraint(equalTo: container.trailingAnchor), web.topAnchor.constraint(equalTo: container.topAnchor), web.bottomAnchor.constraint(equalTo: container.bottomAnchor)])
-        let title = NSTextField(labelWithString: "Your software. On your Mac.")
+        let title = NSTextField(labelWithString: "Unforge")
         title.font = .systemFont(ofSize: 28, weight: .semibold)
         message = NSTextField(wrappingLabelWithString: "Opening your workspace…")
         message.alignment = .center
@@ -121,8 +121,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         item(windows, "Show Unforge", #selector(showWindow), target: self)
     }
 
+    var bundledBuild: [String: Any]? {
+        guard let url = Bundle.main.resourceURL?.appendingPathComponent("BUILD.json"),
+              let data = try? Data(contentsOf: url), data.count <= 128 * 1024,
+              let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return info
+    }
     @objc func about() {
-        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "Unforge", .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.3.1", .credits: NSAttributedString(string: "Built for humans. Owned by you.\nLocal workspace · MIT open source\nYour projects stay outside the app bundle.")])
+        var identity = "Build identity unavailable"
+        if let info = bundledBuild {
+            let revision = info["sourceRevision"] as? String ?? "unknown"
+            let signing = info["signing"] as? String ?? "unknown"
+            let notarization: String
+            if let verified = info["notarized"] as? Bool {
+                notarization = verified ? "notarized" : "not notarized"
+            } else {
+                notarization = "notarization recorded with the release"
+            }
+            let dirty = info["sourceDirty"] as? Bool == true ? " · uncommitted source" : ""
+            identity = "Revision \(revision.prefix(12))\(dirty)\n\(signing) signed · \(notarization)"
+        }
+        NSApp.orderFrontStandardAboutPanel(options: [.applicationName: "Unforge", .applicationVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown", .credits: NSAttributedString(string: identity + "\nMIT open source")])
     }
     @objc func openWorkspace() {
         guard downloads.isEmpty else { return }
@@ -188,10 +207,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             DispatchQueue.main.async { completion(object, (response as? HTTPURLResponse)?.statusCode) }
         }.resume()
     }
-    func matches(_ data: [String: Any]) -> Bool {
+    func matchesWorkspace(_ data: [String: Any]) -> Bool {
         guard data["app"] as? String == "unforge", data["protocol"] as? Int == 1,
               let path = data["workspace"] as? String else { return false }
         return URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath() == home
+    }
+    func matches(_ data: [String: Any]) -> Bool {
+        guard matchesWorkspace(data), let expected = bundledBuild,
+              let version = expected["version"] as? String,
+              data["version"] as? String == version else { return false }
+        if let digest = expected["sourceDigest"] as? String, !digest.isEmpty {
+            return data["sourceDigest"] as? String == digest
+        }
+        // A commit can identify older clean builds; dirty builds require a digest.
+        guard let revision = expected["sourceRevision"] as? String, !revision.isEmpty,
+              expected["sourceDirty"] as? Bool == false,
+              data["sourceDirty"] as? Bool == false else { return false }
+        return data["sourceRevision"] as? String == revision
     }
     func startWorkspace() {
         startupGeneration += 1
@@ -200,6 +232,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         probe { data, code in
             guard generation == self.startupGeneration, !self.stopping else { return }
             if let data = data, self.matches(data) { self.showWorkspace(shared: self.engine?.isRunning != true); return }
+            if let data = data, self.matchesWorkspace(data) {
+                self.status("A different Unforge build is running for this workspace. Quit its Unforge window, or stop the independently started engine, then try again to use this installed build. Your projects stay where they are.", retry: true)
+                return
+            }
             if code != nil {
                 self.status("Port \(self.origin.port!) is already in use. Quit the older Unforge engine or the other app using this port, then try again. Your projects have not moved.", retry: true)
                 return
@@ -232,9 +268,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             var paths = [URL(fileURLWithPath: git).deletingLastPathComponent().path,
                          FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path,
                          "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-            if let codexApp = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.openai.codex") {
-                let tools = codexApp.appendingPathComponent("Contents/Resources")
-                if FileManager.default.isExecutableFile(atPath: tools.appendingPathComponent("codex").path) { paths.append(tools.path) }
+            let apps = ["com.openai.codex", "com.openai.chat"].compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
+                + [URL(fileURLWithPath: "/Applications/ChatGPT.app"), URL(fileURLWithPath: "/Applications/Codex.app")]
+            for app in apps {
+                for relative in ["Contents/Resources", "Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS"] {
+                    let tools = app.appendingPathComponent(relative)
+                    if FileManager.default.isExecutableFile(atPath: tools.appendingPathComponent("codex").path), !paths.contains(tools.path) { paths.append(tools.path) }
+                }
             }
             env["PATH"] = paths.joined(separator: ":")
             env["PYTHONUNBUFFERED"] = "1"

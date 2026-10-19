@@ -16,7 +16,7 @@ export function backupHealth(state) {
   const jobs = [...(state.jobs || [])].sort((a,b) => timestamp(b.createdAt)-timestamp(a.createdAt));
   const running = jobs.some(job => job.state === 'running') || !!schedule.runningJobId;
   const latest = jobs.find(job => job.state === 'completed');
-  const shouldPoll = !!schedule.enabled || running || (!!state.configured && !!schedule.pending);
+  const shouldPoll = running;
   const lastCopy = latest ? completedLabel(latest) : '';
   function result(message, attention = false, detail = lastCopy) {
     return {message,detail,attention,shouldPoll};
@@ -81,11 +81,13 @@ export default function BackupHealth({onOpen,disabled}) {
     const visible = () => { if (document.hidden) stopTimer(); else refresh(); };
     document.addEventListener('visibilitychange',visible);
     window.addEventListener('unforge-backups-updated',refresh);
+    window.addEventListener('unforge-workspace-changed',refresh);
     return () => {
       disposed = true;
       stopTimer();
       document.removeEventListener('visibilitychange',visible);
       window.removeEventListener('unforge-backups-updated',refresh);
+      window.removeEventListener('unforge-workspace-changed',refresh);
     };
   }, []);
   const attention = unavailable || summary?.attention;

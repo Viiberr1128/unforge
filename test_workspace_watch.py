@@ -68,3 +68,16 @@ class WorkspaceWatchTests(unittest.TestCase):
         watcher = self.watcher("import sys\nprint('ready',flush=True)\nprint('changed',flush=True)\nsys.stdin.buffer.read()\n",fail)
         self.wait_for(lambda: watcher.state()['status'] == 'failed')
         self.assertNotIn('private paths',str(watcher.state()))
+
+    def test_schedule_disk_error_keeps_observing_and_later_change_recovers(self):
+        calls = []
+        def callback():
+            calls.append(True)
+            if len(calls) == 1: raise OSError('Disk full')
+        watcher = self.watcher("import sys,time\nprint('ready',flush=True)\nprint('changed',flush=True)\ntime.sleep(.3)\nprint('changed',flush=True)\nsys.stdin.buffer.read()\n", callback)
+        self.wait_for(lambda: watcher.state()['changesObserved'] == 1)
+        self.assertTrue(watcher.state()['observing'])
+        self.assertIn('Disk full', watcher.state()['error'])
+        self.wait_for(lambda: watcher.state()['changesObserved'] == 2)
+        self.assertTrue(watcher.state()['observing'])
+        self.assertIsNone(watcher.state()['error'])

@@ -65,6 +65,8 @@ class AgentJobsTests(unittest.TestCase):
         self.engine = Engine(self.base / 'projects')
         self.project = self.engine.create('Garden')
         self.pid = self.project['id']
+        self.engine.edit(self.pid, '.unforge/app.json', json.dumps({'checks': {'schemaVersion': 1, 'jobs': [{'id': 'fixture', 'command': [sys.executable, '-c', 'raise SystemExit(0)']}]}}))
+        self.engine.save(self.pid, 'Configure explicit fixture checks')
         self.root = self.engine.root(self.pid)
         self.fake = self.base / 'fake-codex'
         self.fake.write_text('#!' + sys.executable + '\n' + FAKE)
@@ -145,10 +147,68 @@ class AgentJobsTests(unittest.TestCase):
         self.assertEqual((self.root / 'new file.txt').read_text(), 'Private ignored notes')
 
     def test_agent_git_config_is_never_used_for_proposal(self):
+        original_config = (self.root / '.git/config').read_bytes()
+        original_head = self.engine.git(self.root, 'rev-parse', 'HEAD')
         job = self.finish(self.jobs.start(self.pid, 'poison-git'))
         self.assertEqual(job['status'], 'completed', job['error'])
+        self.assertEqual((self.root / '.git/config').read_bytes(), original_config)
+        self.assertEqual(self.engine.git(self.root, 'rev-parse', 'HEAD'), original_head)
+        self.assertFalse(self.engine.detail(self.pid)['dirty'])
         self.jobs.apply(job['id'])
         self.assertEqual((self.root / 'README.md').read_text(), 'Safe review clone\n')
+
+    def test_external_lane_commit_after_review_is_not_accepted(self):
+        from lanes import Lanes
+        job = self.finish(self.jobs.start(self.pid, 'change'))
+        lane = Lanes(self.engine).get(self.pid, job['laneId'])
+        work = Path(lane['path'])
+        (work / 'unreviewed.txt').write_text('External edit after review\n')
+        self.engine.git(work, 'add', '--', 'unreviewed.txt')
+        self.engine.git(work, 'commit', '-m', 'External Git tool')
+        with self.assertRaisesRegex(Problem, 'changed after review'):
+            self.jobs.apply(job['id'])
+        self.assertFalse((self.root / 'unreviewed.txt').exists())
+        self.assertEqual((self.root / 'README.md').read_text(), '# Garden\n\n\n')
+
+    def test_failed_checks_preserve_retryable_proposal_and_atomic_provenance(self):
+        graph = {'checks': {'schemaVersion': 1, 'jobs': [{'id': 'gate', 'command': [sys.executable, '-c', 'raise SystemExit(1)']}]}}
+        self.engine.edit(self.pid, '.unforge/app.json', json.dumps(graph))
+        self.engine.save(self.pid, 'Configure failing fixture check')
+        job = self.finish(self.jobs.start(self.pid, 'change'))
+        with self.assertRaisesRegex(Problem, 'Checks must pass'):
+            self.jobs.apply(job['id'])
+        self.assertEqual(self.jobs.get(job['id'])['status'], 'completed')
+        self.assertFalse((self.root / '.unforge/proposals' / (job['id'] + '.json')).exists())
+        graph['checks']['jobs'][0]['command'][-1] = 'raise SystemExit(0)'
+        self.engine.edit(self.pid, '.unforge/app.json', json.dumps(graph))
+        self.engine.save(self.pid, 'Repair fixture check')
+        self.jobs.apply(job['id'])
+        self.assertEqual(self.jobs.get(job['id'])['status'], 'applied')
+        self.assertEqual((self.root / 'README.md').read_text(), 'Changed by the fake agent\n')
+        merged = self.engine.git(self.root, 'rev-parse', 'HEAD').decode().strip()
+        self.assertTrue(self.engine.git(self.root, 'show', merged + ':.unforge/proposals/' + job['id'] + '.json'))
+        parents = self.engine.git(self.root, 'show', '-s', '--format=%P', merged).decode().split()
+        self.assertEqual(len(parents), 2)
+
+    def test_empty_and_failed_attempts_close_unused_lanes(self):
+        from lanes import Lanes
+        self.finish(self.jobs.start(self.pid, 'noop'))
+        self.finish(self.jobs.start(self.pid, 'failed'))
+        lanes = Lanes(self.engine).list(self.pid)['lanes']
+        self.assertTrue(all(lane['status'] == 'closed' for lane in lanes))
+        self.assertTrue(all(not Path(lane['path']).exists() for lane in lanes))
+
+    def test_explicit_codex_executable_discovery_requires_absolute_path(self):
+        discovered = AgentJobs(self.engine)
+        try:
+            with patch.dict(os.environ, {'UNFORGE_CODEX_EXECUTABLE': str(self.fake)}):
+                status = discovered.status()
+                self.assertTrue(status['available'])
+                self.assertEqual(status['executable'], str(self.fake))
+            with patch.dict(os.environ, {'UNFORGE_CODEX_EXECUTABLE': 'relative-codex'}):
+                self.assertFalse(discovered.status()['available'])
+        finally:
+            discovered.close()
 
     def test_directory_replaced_by_file(self):
         self.engine.edit(self.pid, 'folder/note.txt', 'Before')

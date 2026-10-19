@@ -41,6 +41,8 @@ class BackupScheduler:
         self.recovery_required = False
         self.recovery_error = None
         self.recovery_archive = None
+        self.on_changed = None
+        self.startup_reconciled = False
         try:
             self.data = self._load()
         except (OSError, ValueError, TypeError, KeyError) as exc:
@@ -53,6 +55,15 @@ class BackupScheduler:
                                    'The original settings are preserved. Save automatic backup settings to repair them; '
                                    'a new completed backup is required before pending changes can be cleared. ' + str(exc)[:400])
             self.data['lastError'] = 'Previous scheduling history is unavailable. A new completed backup is required.'
+        if self.data['enabled'] and not self.recovery_required:
+            # FSEvents starts at "now". Conservatively include edits made while
+            # the app was closed in the next capture, without a startup scan.
+            if not self._pending(): self.data['pendingSince'] = self.clock()
+            self.data['dirtyGeneration'] += 1
+            self.data['lastChangeAt'] = max(0, self.clock() - self.debounce_seconds)
+            self.startup_reconciled = True
+            try: self._persist()
+            except OSError: pass  # Keep access and show the persistence error.
         if start_thread:
             self.thread = threading.Thread(target=self._run, name='unforge-backup-scheduler', daemon=False)
             self.thread.start()
@@ -64,7 +75,7 @@ class BackupScheduler:
                 'runningJobId': None, 'runningGeneration': None,
                 'starting': False, 'lastChangeAt': None, 'lastAttemptAt': None,
                 'lastCompletedAt': None, 'retryAfter': None, 'lastError': None,
-                'pendingSince': None}
+                'pendingSince': None, 'consecutiveFailures': 0}
 
     def _load(self):
         try:
@@ -83,6 +94,11 @@ class BackupScheduler:
                 raise Problem('Automatic backup settings cannot be read. Preserve the settings file before repairing it.') from exc
         if isinstance(value, dict) and 'pendingSince' not in value:
             value['pendingSince'] = value.get('lastChangeAt') if value.get('dirtyGeneration', 0) != value.get('backedUpGeneration', 0) else None
+        if isinstance(value, dict):
+            value.setdefault('consecutiveFailures', 1 if value.get('lastError') else 0)
+            # Upgrade the old interval-sized retry without delaying another day.
+            if value.get('lastError') and type(value.get('lastAttemptAt')) in (int, float) and type(value.get('retryAfter')) in (int, float):
+                value['retryAfter'] = min(value['retryAfter'], value['lastAttemptAt'] + self._retry_delay(value['consecutiveFailures']))
         if not isinstance(value, dict) or value.get('schemaVersion') != 1 or set(value) != set(self._empty()):
             raise Problem('Unsupported automatic backup settings.')
         if type(value['enabled']) is not bool or type(value['starting']) is not bool:
@@ -93,6 +109,8 @@ class BackupScheduler:
                 raise Problem('Invalid backup generation.')
         if value['backedUpGeneration'] > value['dirtyGeneration']:
             raise Problem('Invalid completed backup generation.')
+        if type(value['consecutiveFailures']) is not int or not 0 <= value['consecutiveFailures'] <= 2**31 - 1:
+            raise Problem('Invalid backup retry history.')
         generation = value['runningGeneration']
         if generation is not None and (type(generation) is not int or not 0 <= generation <= value['dirtyGeneration']):
             raise Problem('Invalid running backup generation.')
@@ -146,6 +164,9 @@ class BackupScheduler:
             finally:
                 os.close(directory)
             self.persistence_error = None
+            if self.on_changed:
+                try: self.on_changed()
+                except Exception: pass
         except Exception as exc:
             self.persistence_error = 'Automatic backup progress could not be saved: ' + str(exc)[:500]
             raise
@@ -168,6 +189,16 @@ class BackupScheduler:
     def _pending(self):
         return self.data['dirtyGeneration'] > self.data['backedUpGeneration']
 
+    @staticmethod
+    def _retry_delay(failures):
+        if type(failures) is not int or failures < 0: raise Problem('Invalid backup retry history.')
+        return min(3600, 300 * 2**min(max(0, failures - 1), 4))
+
+    def _failed(self, error, now):
+        count = min(2**31 - 1, self.data['consecutiveFailures'] + 1)
+        self.data.update(lastError=str(error)[:2000], consecutiveFailures=count,
+                         retryAfter=now + self._retry_delay(count))
+
     def _due(self):
         if not self.data['enabled'] or not self._pending() or self.data['runningJobId']:
             return None
@@ -176,9 +207,10 @@ class BackupScheduler:
         if self.data['pendingSince'] is not None:
             # Continuous editing must not postpone every backup forever.
             changes_due = min(changes_due, self.data['pendingSince'] + interval)
-        attempt_due = 0 if self.data['lastAttemptAt'] is None else self.data['lastAttemptAt'] + interval
+        if self.data['lastError']:
+            return max(self.data['retryAfter'] or 0, self.retry_not_before)
         completion_due = 0 if self.data['lastCompletedAt'] is None else self.data['lastCompletedAt'] + interval
-        return max(changes_due, attempt_due, completion_due, self.data['retryAfter'] or 0, self.retry_not_before)
+        return max(changes_due, completion_due, self.data['retryAfter'] or 0, self.retry_not_before)
 
     def state(self):
         with self.condition:
@@ -191,8 +223,23 @@ class BackupScheduler:
                           persistenceError=self.persistence_error,
                           error=self.recovery_error or self.persistence_error or self.data['lastError'],
                           recoveryRequired=self.recovery_required, recoveryArchive=self.recovery_archive,
-                          scope='Changes reported through Unforge while this app is open. External file edits and changes inside running apps are not automatically detected. A verified local copy does not prove a cloud upload.')
+                          retryDelaySeconds=self._retry_delay(self.data['consecutiveFailures']),
+                          startupReconciled=self.startup_reconciled,
+                          scope='Changes reported by Unforge and the available workspace watcher. Opening this app schedules a reconciliation of changes made while it was closed. A verified local copy does not prove a cloud upload.')
             return result
+
+    def retry_now(self):
+        with self.condition:
+            if self.closed or not self.data['enabled'] or self.recovery_required:
+                raise Problem('Enable automatic backups with valid settings before retrying.')
+            if not self._pending(): return self.state()
+            self.data['retryAfter'] = self.clock()
+            self.retry_not_before = 0
+            # Preserve the error until a new capture begins; it tells _due this
+            # is a retry rather than the normal successful-capture interval.
+            self.data['lastError'] = self.data['lastError'] or 'A backup retry was requested.'
+            self._persist(); self.condition.notify_all()
+            return self.state()
 
     def configure(self, enabled, interval_seconds=300):
         if type(enabled) is not bool:
@@ -269,10 +316,9 @@ class BackupScheduler:
                         self.data['backedUpGeneration'] = max(self.data['backedUpGeneration'], captured)
                     if not self._pending():
                         self.data['pendingSince'] = None
-                    self.data.update(lastCompletedAt=now, lastError=None, retryAfter=None)
+                    self.data.update(lastCompletedAt=now, lastError=None, retryAfter=None, consecutiveFailures=0)
                 else:
-                    self.data.update(lastError=(str(job.get('error') or 'The automatic backup did not complete.') if job else 'The automatic backup outcome is unavailable. Pending changes remain scheduled.')[:2000],
-                                     retryAfter=now + self.data['intervalSeconds'])
+                    self._failed(job.get('error') or 'The automatic backup did not complete.' if job else 'The automatic backup outcome is unavailable. Pending changes remain scheduled.', now)
                 self.data.update(runningJobId=None, runningGeneration=None, starting=False)
                 try:
                     self._persist()
@@ -284,9 +330,8 @@ class BackupScheduler:
             elif self.data['starting']:
                 # Process stopped after durable intent but before the returned
                 # job identity was recorded. Do not guess which receipt is ours.
-                self.data.update(starting=False, runningGeneration=None,
-                                 lastError='The last backup start was interrupted. Pending changes were preserved.',
-                                 retryAfter=now + self.data['intervalSeconds'])
+                self.data.update(starting=False, runningGeneration=None)
+                self._failed('The last backup start was interrupted. Pending changes were preserved.', now)
                 self._persist()
             if not self.data['enabled'] or not self._pending():
                 self.blocked_reason = None
@@ -321,11 +366,12 @@ class BackupScheduler:
             except Exception as exc:
                 # Even if start succeeded and its receipt write failed, never
                 # clear the generation; a live worker prevents duplicate start.
-                self.data.update(starting=False, lastError=str(exc)[:2000], retryAfter=now + self.data['intervalSeconds'])
+                self.data.update(starting=False)
+                self._failed(exc, now)
                 if not self.data['runningJobId']:
                     self.data['runningGeneration'] = None
                 self._persist()
-                return self.poll_seconds if self._busy() else self.data['intervalSeconds']
+                return self.poll_seconds if self._busy() else self._retry_delay(self.data['consecutiveFailures'])
             return self.poll_seconds
 
     def _run(self):
@@ -335,8 +381,8 @@ class BackupScheduler:
                     delay = self._step()
                 except Exception as exc:
                     self.data['lastError'] = str(exc)[:2000]
-                    self.retry_not_before = self.clock() + self.data['intervalSeconds']
-                    delay = self.data['intervalSeconds']
+                    delay = self._retry_delay(self.data['consecutiveFailures'])
+                    self.retry_not_before = self.clock() + delay
                 if not self.closed:
                     self.condition.wait(timeout=delay)
 

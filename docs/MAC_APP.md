@@ -98,7 +98,7 @@ and storage-provider quota still grow.
 
 Automatic backups are opt-in and operate while Unforge is open. A native helper
 reports workspace changes without sending filenames outside the local engine.
-Each completed backup is restored and checked locally before it is reported as
+Each completed backup is decrypted and checked against the complete captured inventory before it is reported as
 locally verified. A synced-folder copy is not proof of a completed cloud upload.
 The upload-status helper reads macOS metadata only. Explicit iCloud recovery
 rehearsal is separate: after every file has confirmed upload status, another
@@ -138,7 +138,7 @@ the app, verifies that signature, and writes:
 
 ```text
 artifacts/macos/Unforge.app
-artifacts/macos/Unforge-0.3.1-macos-arm64.zip
+artifacts/macos/Unforge-0.4.0-macos-arm64.zip
 artifacts/macos/SHA256SUMS
 ```
 
@@ -177,7 +177,7 @@ repository. Create an App Store Connect API key with Notary access, keep the
 Team keys need `issuer_id`; individual keys omit it. The script then submits
 the zip with `notarytool`, staples the ticket, and re-packs the archive. Pass
 `--skip-notarize` to stop after signing. `Contents/Resources/BUILD.json` records `signing` as
-`developer-id` or `ad-hoc`, and `notarized` after a successful staple.
+`developer-id` or `ad-hoc`. The signed build records `notarized: false` when submission is skipped, or `null` when verification will be recorded externally. A versioned release receipt beside the final archive records `notarized: true` only after Apple accepts the submission and stapling validates; the signed bundle is never rewritten afterward.
 Signature verification on the build Mac is not App Store review.
 
 ## Updates and recovery

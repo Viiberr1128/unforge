@@ -1,4 +1,7 @@
 import json
+import io
+import hashlib
+import tarfile
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -70,6 +73,7 @@ class BackupTests(unittest.TestCase):
             db.execute('PRAGMA journal_mode=WAL')
             db.execute('CREATE TABLE items(value TEXT)')
             db.execute("INSERT INTO items VALUES('committed in WAL')");db.commit()
+            original_main_bytes=(project/'sample.sqlite').stat().st_size
             target=self.root.resolve()/'snapshot';target.mkdir()
             manifest=self.service._copy_workspace(target)
             self.assertEqual((target/self.project['id']/'notes-wal').read_text(),'ordinary user work')
@@ -78,6 +82,8 @@ class BackupTests(unittest.TestCase):
             # Context managers alone leave SQLite connections open. A WAL
             # source must become a closed, self-contained output before hashing.
             copied=target/self.project['id']/'sample.sqlite'
+            self.assertGreater(copied.stat().st_size,original_main_bytes)
+            self.assertEqual(manifest['sourceBytes'],sum(entry['bytes'] for entry in manifest['files']))
             self.assertFalse(any(Path(str(copied)+suffix).exists() for suffix in ('-wal','-shm','-journal')))
             self.service.verify_workspace(target)
             with sqlite3.connect(target/self.project['id']/'sample.sqlite') as recovered:
@@ -168,3 +174,39 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(self.service.jobs[job['id']]['state'],'failed')
         self.assertIn('symbolic link',self.service.jobs[job['id']]['error'])
         self.assertEqual(list((actual/'destination').iterdir()),[])
+
+
+class StreamVerificationTests(unittest.TestCase):
+    def fixture(self, files=None, special=None):
+        payload = b'private source fixture'
+        expected = {'schema':1, 'fileCount':1, 'files':[{'path':'project/source.txt',
+            'bytes':len(payload), 'sha256':hashlib.sha256(payload).hexdigest()}]}
+        marker = json.dumps(expected).encode(); stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode='w') as archive:
+            for name, data in (files if files is not None else [('project/source.txt',payload)]) + [('UNFORGE-RECOVERY.json',marker)]:
+                item = tarfile.TarInfo(name); item.size = len(data)
+                archive.addfile(item, io.BytesIO(data))
+            if special is not None: archive.addfile(special)
+        stream.seek(0)
+        return stream, expected, hashlib.sha256(marker).hexdigest()
+
+    def test_exact_decrypted_content_is_verified_without_extracting_files(self):
+        stream, expected, checksum = self.fixture()
+        self.assertEqual(Backups.verify_workspace_stream(stream, expected, checksum), expected)
+
+    def test_missing_extra_changed_duplicate_and_manifest_damage_are_rejected(self):
+        for files in ([], [('extra.txt',b'x')], [('project/source.txt',b'wrong')],
+                      [('project/source.txt',b'PRIVATE SOURCE FIXTURE')],
+                      [('project/source.txt',b'private source fixture')]*2):
+            with self.subTest(files=files):
+                stream, expected, checksum = self.fixture(files)
+                with self.assertRaises(Problem): Backups.verify_workspace_stream(stream, expected, checksum)
+        stream, expected, checksum = self.fixture()
+        with self.assertRaises(Problem): Backups.verify_workspace_stream(stream, expected, '0'*64)
+
+    def test_archive_path_escape_and_non_regular_entries_are_rejected(self):
+        for name, kind in [('../escape',tarfile.DIRTYPE),('/absolute',tarfile.DIRTYPE),
+                           ('link',tarfile.SYMTYPE),('hard-link',tarfile.LNKTYPE),('pipe',tarfile.FIFOTYPE)]:
+            item = tarfile.TarInfo(name); item.type=kind; item.linkname='project/source.txt'
+            stream, expected, checksum = self.fixture(special=item)
+            with self.assertRaises(Problem): Backups.verify_workspace_stream(stream, expected, checksum)

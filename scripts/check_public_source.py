@@ -17,9 +17,14 @@ PRIVATE_EMAIL = re.compile(
 )
 KEY_BLOB = re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----')
 UNFORGE_HOME_DATA = re.compile(rb'\.local/share/unforge/[a-f0-9]{32}')
+PRIVATE_FLEET_STATE = re.compile(rb'(?:Library/Application Support/Codex/' + b'subscription-' + b'fleet|'
+                                 rb'\.codex/skills/' + b'subscription-' + rb'fleet/(?:runs|state)|'
+                                 rb'\.grok/' + rb'auth\.json)')
 FORBIDDEN_NAMES = {
     '.env', 'credentials.json', 'auth.json', 'secrets.json', 'recovery-key',
-    'recovery-key.txt', 'settings.json',
+    'recovery-key.txt', 'settings.json', 'fleet-bridge-state.json',
+    'subscription-fleet-state.json', 'provider-readiness.json',
+    'account-readiness.json', 'allowance-snapshots.json',
 }
 
 
@@ -47,6 +52,8 @@ def main():
             failures.append(f'home path {relative}')
         if UNFORGE_HOME_DATA.search(data):
             failures.append(f'workspace project path {relative}')
+        if PRIVATE_FLEET_STATE.search(data):
+            failures.append(f'private Fleet state path {relative}')
         if KEY_BLOB.search(data):
             failures.append(f'private key {relative}')
         if PRIVATE_EMAIL.search(data) and relative.as_posix() not in {

@@ -1,10 +1,10 @@
-node_modules/
+node_modules
 dist/
 __pycache__/
 *.pyc
 .venv/
-.venv-macos/
-.tools/
+.venv-macos
+.tools
 .DS_Store
 .env
 .env.*
@@ -17,6 +17,9 @@ artifacts/
 .drafts/
 .agent-jobs/
 .codex/
+.fleet/
+.subscription-fleet/
+fleet-state/
 auth.json
 credentials.json
 recovery-key

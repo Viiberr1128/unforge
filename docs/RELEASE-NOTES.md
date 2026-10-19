@@ -1,3 +1,39 @@
+# Unforge 0.4.0 — outcome-first Fleet work
+
+AI work now starts with the outcome. Unforge inspects the exact saved source without launching a provider, proposes one to eight likely files and an optional focused check, and requires plan approval before it creates a lane or consumes subscription allowance. Advanced mode retains direct provider, size, acceptance, and exact-file controls.
+
+The job card reports observed preparation, editing, checking, and review phases from Fleet wrapper state instead of treating model prose as progress. Reviewer concerns appear before the integration action; provider details, raw output, and the exact diff remain under Details. The final integration review keeps consequences, changed files, reviewer concerns, and the diff together.
+
+Fleet Bridge v2 adds sanitized readiness and exact-bound status, bounded project context, independent resolution of a trusted `.unforge/app.json` focused check, request/check-bound candidate results, exact recovery, and accepted/rejected calibration finalization. V1 run and recovery remain compatible. Paid API fallback and daemons remain disabled, and Fleet still has no integration, release, deployment, publishing, messaging, billing, or provisioning authority.
+
+Validation includes deterministic planning, stale and cross-project rejection, exact-file enforcement, wrapper progress binding, focused-check graph binding, v1 compatibility, exact recovery, finalization idempotence, frontend state mapping, the complete backend/frontend suites, and a locally installed Mac build. These checks establish local protocol and source behavior, not provider quality, deployment, or live product behavior.
+
+# Unforge 0.3.3 — private subscription Fleet proposals
+
+Unforge can now route a bounded source-only proposal through an optional local Subscription Fleet installation while keeping Unforge in charge of source, checks, acceptance, merge, release, and deployment. Each request binds an operation ID, exact base revision, concrete acceptance criteria, and one to eight exact files. Returned patches are independently reconstructed and rejected on identity, checksum, size, binary, history, or file-scope mismatch.
+
+Fleet reviewer output is retained as bounded testimony labeled `completed-uninterpreted`, never as approval. The interface shows the report and requires explicit acknowledgment of the report and exact diff before applying. The committed proposal record omits the reviewer narrative so source history does not accidentally retain provider excerpts; local job history keeps it for review.
+
+Interrupted Unforge callers can recover an exact already-durable Fleet result without launching another provider or consuming another local attempt. Recovery works across the crash boundary before or after lane materialization and remains unavailable for active, missing, mismatched, or incomplete results. The 12-hour bridge envelope allows the Fleet's shorter supervised author, same-writer continuation, validation, and reviewer windows to finish without weakening their own limits.
+
+The public source contains only the generic adapter, tests, and documentation. Provider credentials, allowance snapshots, private Fleet state, logs, account identity, and project recipes remain outside the repository and app bundle. Official mirror publication now requires both the generic public-source check and the maintainer's private denylist. No provider account, paid API fallback, background daemon, deployment, or public publishing is added.
+
+Validation for this build includes the complete Python suite, frontend tests and production build, the Fleet proof integration harness, public-source self-scan regressions, checksum/replay/crash recovery, lost-caller export, reviewer-blocker testimony, exact allowlist enforcement, and result-symlink rejection. These checks establish the bounded local handoff, not provider quality, functional correctness of every generated change, deployment, or live behavior.
+
+# Unforge 0.3.2 — recovery and release correctness
+
+Checks run against immutable source and configuration, honor fresh execution, bound output, and clean up child groups. Unconfigured checks are reported honestly. Lane merges use the checked commit; conflicts retain their stages and expose resolution. Agents use independent Git repositories and accepted contents match reviewed proposals. Change-file imports validate their bounded archive before writing.
+
+Publishing retains the actual artifact and rollback redeploys earlier contents. Fly and Workers observation is explicit and keeps readiness separate from source identity. The overview shows working and production source, observed deployment, worktrees and declared hosted-data capture freshness.
+
+Recovery capture uses guarded APFS clones, delta phase budgets, exact encrypted streaming readback, independent failure retries and phase timing. Existing points remain intact; generation retention is a review inventory with no automatic deletion. Builds expose revision/capabilities and discover current Codex executable layouts.
+
+Append-only publication checks new ciphertext and reuses private identity evidence for unchanged objects, avoiding routine hydration of evicted cloud packs. Legacy completed points retain a labeled metadata-only baseline until independently inspected. Explicit restores and recovery rehearsals still verify all required objects.
+
+Restored managed lanes are rebound to the new workspace after captured-byte verification. External worktree registrations are preserved as inactive metadata; restored operations cannot follow the original lane path. Capture and normalized inventories remain separately recorded.
+
+Validation results accompany the packaged local build. These changes do not establish production application behavior or a fresh cloud-download restore by themselves.
+
 # Unforge 0.3.1 — security hardening and public information
 
 Historical source restoration now checks the same expanded-byte and file-count limits as project import before writing files. Regression cases cover a small current version with oversized historical ancestors and preserve the current source when restoration is refused.

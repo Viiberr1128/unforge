@@ -183,6 +183,60 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(errors, '')
         self.assertEqual(call.call_args.args[1]['operationId'], operation)
 
+    def test_cli_sends_bounded_subscription_fleet_contract(self):
+        request = self.home / 'request.txt'
+        acceptance = self.home / 'acceptance.txt'
+        request.write_text('Improve the example behavior.')
+        acceptance.write_text('The focused behavior passes and the existing interface remains intact.')
+        with patch('unforge.Client.call', return_value={'id': 'b' * 32}) as call:
+            code, result, errors = self.cli(
+                'agent-start', 'a' * 32, '--provider', 'subscription-fleet',
+                '--from-file', str(request), '--acceptance-file', str(acceptance),
+                '--allow-path', 'src/example.js', '--allow-path', 'src/example.test.js',
+                '--size', 'large', '--operation-id', 'fleet-example-1')
+        self.assertEqual(code, 0, errors)
+        self.assertEqual(result['id'], 'b' * 32)
+        self.assertEqual(call.call_args.args[0], '/agent/jobs')
+        self.assertEqual(call.call_args.args[1], {
+            'projectId': 'a' * 32,
+            'request': 'Improve the example behavior.',
+            'operationId': 'fleet-example-1',
+            'provider': 'subscription-fleet',
+            'fleet': {
+                'acceptance': 'The focused behavior passes and the existing interface remains intact.',
+                'allowPaths': ['src/example.js', 'src/example.test.js'],
+                'size': 'large',
+            },
+        })
+        with patch('unforge.Client.call', return_value={'status': 'applied'}) as call:
+            code, _, errors = self.cli('agent-apply', 'b' * 32, '--review-acknowledged')
+        self.assertEqual(code, 0, errors)
+        self.assertEqual(call.call_args.args, ('/agent/jobs/' + 'b' * 32 + '/apply', {'reviewAcknowledged': True}))
+        with patch('unforge.Client.call', return_value={'status': 'completed'}) as call:
+            code, _, errors = self.cli('agent-recover', 'b' * 32)
+        self.assertEqual(code, 0, errors)
+        self.assertEqual(call.call_args.args, ('/agent/jobs/' + 'b' * 32 + '/recover', {}))
+
+    def test_cli_plans_starts_and_rejects_exact_work(self):
+        outcome = self.home / 'outcome.txt'
+        outcome.write_text('Improve the example behavior.')
+        with patch('unforge.Client.call', return_value={'id': 'c' * 32, 'status': 'ready'}) as call:
+            code, result, errors = self.cli('agent-plan', 'a' * 32, '--from-file', str(outcome))
+        self.assertEqual(code, 0, errors)
+        self.assertEqual(result['id'], 'c' * 32)
+        self.assertEqual(call.call_args.args, ('/agent/plans', {
+            'projectId': 'a' * 32, 'outcome': 'Improve the example behavior.'}))
+        with patch('unforge.Client.call', return_value={'id': 'b' * 32}) as call:
+            code, _, errors = self.cli('agent-start-plan', 'a' * 32, 'c' * 32,
+                                       '--operation-id', 'planned-example-1')
+        self.assertEqual(code, 0, errors)
+        self.assertEqual(call.call_args.args, ('/agent/jobs', {
+            'projectId': 'a' * 32, 'planId': 'c' * 32, 'operationId': 'planned-example-1'}))
+        with patch('unforge.Client.call', return_value={'status': 'rejected'}) as call:
+            code, _, errors = self.cli('agent-reject', 'b' * 32)
+        self.assertEqual(code, 0, errors)
+        self.assertEqual(call.call_args.args, ('/agent/jobs/' + 'b' * 32 + '/reject', {}))
+
     def test_cli_lanes_merge_checks_and_observed_publish(self):
         project = self.client.call('/projects', {'name': 'Lane from CLI'})
         pid = project['id']

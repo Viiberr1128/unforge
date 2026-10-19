@@ -31,9 +31,12 @@ class Engine:
 
     def git_run(self, root, *args, allowed_returncodes=(0,), timeout=30):
         env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        # Reads must not rewrite a captured index. Git diff also has a separate
+        # automatic refresh setting; explicit add/commit still take their locks.
         env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
-                   GIT_TERMINAL_PROMPT='0', GIT_ATTR_NOSYSTEM='1')
+                   GIT_TERMINAL_PROMPT='0', GIT_ATTR_NOSYSTEM='1', GIT_OPTIONAL_LOCKS='0')
         result = subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
+            '-c', 'diff.autoRefreshIndex=false',
             '-c', 'user.name=Unforge Local', '-c', 'user.email=local@unforge.invalid',
             '-c', 'core.fsync=committed', '-c', 'core.fsyncMethod=fsync',
             '-c', 'commit.gpgsign=false', *args], cwd=root, env=env, capture_output=True, timeout=timeout)
@@ -414,13 +417,18 @@ class Server(ThreadingHTTPServer):
             raise Problem('Another Unforge server is already using this data folder')
         try:
             super().__init__(address, Handler)
+            from change_feed import ChangeFeed
+            self.change_feed = ChangeFeed()
+            self.event_slots = threading.BoundedSemaphore(8)
             from agent_jobs import AgentJobs
+            from agent_plans import AgentPlans
             from operations import Operations
             from recovery import Recovery
             from care import Care
             self.operations = Operations(engine.home)
             self.recovery = Recovery(engine)
             self.care = Care(engine)
+            self.agent_plans = AgentPlans(engine)
             self.agent_jobs = AgentJobs(engine, operations=self.operations)
             from backups import Backups
             from projects import Projects
@@ -441,7 +449,9 @@ class Server(ThreadingHTTPServer):
             from exchange import Exchange
             from second_home import SecondHome
             self.backup_scheduler = BackupScheduler(engine, self.backups)
-            self.workspace_watch = WorkspaceWatch(engine.home, self.backup_scheduler.changed)
+            self.backup_scheduler.on_changed = self.change_feed.publish
+            self.backups.on_changed = self.change_feed.publish
+            self.workspace_watch = WorkspaceWatch(engine.home, self.workspace_changed)
             self.lanes = Lanes(engine)
             self.checks = Checks(engine)
             self.releases = Releases(engine, self.checks)
@@ -450,6 +460,10 @@ class Server(ThreadingHTTPServer):
             self.github_import = GitHubImport(engine)
             self.exchange = Exchange(engine, self.lanes)
             self.second_home = SecondHome(engine)
+            from operating import Operating
+            self.operating = Operating(engine)
+            from lane_review import LaneReview
+            self.lane_review = LaneReview(engine, self.lanes, self.checks, self.care, self.operating)
         except Exception:
             self.server_close()
             raise
@@ -460,8 +474,16 @@ class Server(ThreadingHTTPServer):
             self._home_lock.close()
             self._home_lock = None
 
+    def workspace_changed(self):
+        try:
+            self.backup_scheduler.changed()
+        finally:
+            self.change_feed.publish()
+
     def server_close(self):
         try:
+            if hasattr(self, 'change_feed'):
+                self.change_feed.close()
             if hasattr(self, 'workspace_watch'):
                 self.workspace_watch.close()
             if hasattr(self, 'backup_scheduler'):
@@ -485,12 +507,13 @@ class Handler(BaseHTTPRequestHandler):
     def send(self, status, data, mime='application/json', disposition=None):
         if 200 <= status < 300 and self.command == 'POST' and hasattr(self.server,'backup_scheduler'):
             path = urlsplit(self.path).path
-            if not path.startswith('/api/backups') and path not in ('/api/folders/inventory',):
+            if not path.startswith('/api/backups') and path not in ('/api/folders/inventory',) and not path.endswith(('/checks', '/observe')):
                 try:
                     self.server.backup_scheduler.changed()
                 except (OSError, ValueError) as error:
                     if isinstance(data,dict):
                         data = {**data,'backupWarning':'Your change completed, but automatic backup tracking needs attention: '+str(error)}
+            self.server.change_feed.publish()
         if mime == 'application/json':
             data = json.dumps(data).encode()
         self.send_response(status)
@@ -519,10 +542,37 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(403, dict(error='Cross-origin reads are not allowed'))
         try:
             path = unquote(urlsplit(self.path).path)
+            if path == '/api/events':
+                if not self.server.event_slots.acquire(blocking=False):
+                    return self.send(503, dict(error='Too many open workspace event streams'))
+                try:
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/event-stream')
+                    self.send_header('Cache-Control', 'no-store')
+                    self.send_header('X-Content-Type-Options', 'nosniff')
+                    self.end_headers()
+                    revision = self.server.change_feed.revision
+                    self.wfile.write(('data: ' + json.dumps({'revision': revision}) + '\n\n').encode())
+                    self.wfile.flush()
+                    while True:
+                        updated, closed = self.server.change_feed.wait(revision)
+                        if closed:
+                            return
+                        message = 'data: ' + json.dumps({'revision': updated}) + '\n\n' if updated != revision else ': keepalive\n\n'
+                        self.wfile.write(message.encode())
+                        self.wfile.flush()
+                        revision = updated
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                finally:
+                    self.server.event_slots.release()
+            from build_info import current as build_identity
+            if path == '/api/build':
+                return self.send(200, build_identity())
             if path == '/api/health':
-                return self.send(200, dict(ok=True, version='0.3.1'))
+                return self.send(200, dict(ok=True, **build_identity()))
             if path == '/api/desktop':
-                return self.send(200, dict(app='unforge', protocol=1, version='0.3.1',
+                return self.send(200, dict(app='unforge', protocol=1, **build_identity(),
                     workspace=str(self.server.engine.home), pid=os.getpid(),
                     desktopId=getattr(self.server, 'desktop_id', ''),
                     managed=getattr(self.server, 'desktop_managed', False),
@@ -531,6 +581,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, dict(token=self.server.token))
             if path == '/api/agent/status':
                 return self.send(200, self.server.agent_jobs.status())
+            plan_match = re.fullmatch(r'/api/agent/plans/([a-f0-9]{32})', path)
+            if plan_match:
+                return self.send(200, self.server.agent_plans.get(plan_match[1]))
             if path == '/api/operations':
                 return self.send(200, self.server.operations.overview())
             consequence_match = re.fullmatch(r'/api/agent/jobs/([a-f0-9]{32})/consequences', path)
@@ -556,6 +609,33 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, self.server.github_import.inspect(github_get[1]))
             if path == '/api/runtime':
                 return self.send(200, self.server.runtime.overview())
+            operating_match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/operating', path)
+            if operating_match:
+                return self.send(200, self.server.operating.get(operating_match[1]))
+            recovery_status_match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/recovery-status', path)
+            if recovery_status_match:
+                from recovery_status import project_recovery_status
+                return self.send(200, project_recovery_status(self.server.engine, recovery_status_match[1]))
+            lane_review_match = re.fullmatch(r'/api/projects/([a-f0-9]{32})/lanes/([a-f0-9]{32})/review', path)
+            if lane_review_match:
+                return self.send(200, self.server.lane_review.review(*lane_review_match.groups()))
+            lane_content = re.fullmatch(r'/api/projects/([a-f0-9]{32})/lanes/([a-f0-9]{32})/(content|conflicts)', path)
+            if lane_content:
+                pid, lid, action = lane_content.groups()
+                if action == 'conflicts':
+                    return self.send(200, self.server.integrate.conflicts(pid, lid))
+                query = parse_qs(urlsplit(self.path).query)
+                lane = self.server.lanes.get(pid, lid)
+                target = self.server.engine.safe_path(Path(lane['path']), query.get('path', [''])[0])
+                if not target.is_file():
+                    return self.send(200, {'path': query.get('path', [''])[0], 'content': None})
+                with target.open('rb') as file:
+                    raw = file.read(MAX_TEXT + 1)
+                if len(raw) > MAX_TEXT:
+                    raise Problem('This file is too large for the text editor')
+                if b'\0' in raw:
+                    raise Problem('This binary file cannot be opened in the text editor')
+                return self.send(200, {'path': query.get('path', [''])[0], 'content': raw.decode('utf-8')})
             project_tool = re.fullmatch(r'/api/projects/([a-f0-9]{32})/(files|content|adoption|runtime|drafts|draft|history|lanes|app|releases)', path)
             if project_tool:
                 pid, action = project_tool.groups()
@@ -672,6 +752,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200,self.server.backups.cloud_rehearse(payload.get('jobId'),payload.get('path'),payload.get('password'),payload.get('destination')))
             if path == '/api/backups/start':
                 return self.send(202,self.server.backups.start())
+            if path == '/api/backups/retry':
+                return self.send(200,self.server.backup_scheduler.retry_now())
             if path == '/api/backups/restore':
                 return self.send(200,self.server.backups.restore(payload.get('path'),payload.get('password'),payload.get('destination')))
             if path == '/api/folders/inventory':
@@ -681,21 +763,28 @@ class Handler(BaseHTTPRequestHandler):
             if path.endswith('/lanes') and path.startswith('/api/projects/'):
                 lane_create = re.fullmatch(r'/api/projects/([a-f0-9]{32})/lanes', path)
                 if lane_create:
-                    return self.send(201, self.server.lanes.create(lane_create[1], payload.get('name'), payload.get('parent'), payload.get('claimedPaths')))
-            lane_post = re.fullmatch(r'/api/projects/([a-f0-9]{32})/lanes/([a-f0-9]{32})/(file|save|merge|restack|close)', path)
+                    return self.send(201, self.server.lanes.create(lane_create[1], payload.get('name'), payload.get('parent'), payload.get('claimedPaths'), base_ref=payload.get('baseRef')))
+            lane_post = re.fullmatch(r'/api/projects/([a-f0-9]{32})/lanes/([a-f0-9]{32})/(file|save|merge|restack|close|resolve)', path)
             if lane_post:
                 pid, lid, action = lane_post.groups()
-                if action == 'file': result = self.server.lanes.write(pid, lid, payload.get('path'), payload.get('content'))
+                if action == 'file': result = self.server.lanes.write(pid, lid, payload.get('path'), payload.get('content'), expected_content=payload.get('expectedContent', UNSET))
+                elif action == 'resolve': result = self.server.integrate.resolve(pid, lid, payload.get('path'), payload.get('strategy'), content=payload.get('content'), expected_content=payload.get('expectedContent', UNSET), expected_revision=payload.get('revision'))
                 elif action == 'save': result = self.server.lanes.save(pid, lid, payload.get('message'))
                 elif action == 'restack': result = self.server.integrate.restack(pid, lid)
                 elif action == 'close': result = self.server.lanes.close(pid, lid)
                 else:
+                    expected_digest = payload.get('expectedReviewDigest')
+                    if expected_digest is not None:
+                        current_review = self.server.lane_review.review(pid, lid)
+                        if (not isinstance(expected_digest, str) or
+                                not secrets.compare_digest(expected_digest, current_review['reviewDigest'])):
+                            raise Problem('This review changed. Review the current lane before merging.')
                     def require_checks(tree):
-                        if self.server.checks.passed(pid, tree):
-                            return True
-                        receipt = self.server.checks.run(pid, lane_id=lid)
+                        receipt = self.server.checks.run(pid, lane_id=lid, tree=tree)
                         return receipt.get('status') == 'passed'
-                    result = self.server.integrate.merge(pid, lid, require_checks=require_checks)
+                    result = self.server.integrate.merge(
+                        pid, lid, require_checks=require_checks,
+                        expected_head=payload.get('expectedHead'), expected_live=payload.get('expectedLive'))
                 return self.send(200, result)
             if re.fullmatch(r'/api/projects/([a-f0-9]{32})/checks', path):
                 pid = path.split('/')[3]
@@ -703,6 +792,12 @@ class Handler(BaseHTTPRequestHandler):
             if re.fullmatch(r'/api/projects/([a-f0-9]{32})/releases/publish', path):
                 pid = path.split('/')[3]
                 return self.send(200, self.server.releases.publish(pid, payload.get('destinationId')))
+            release_action = re.fullmatch(r'/api/projects/([a-f0-9]{32})/releases/(observe|rollback)', path)
+            if release_action:
+                pid, action = release_action.groups()
+                if action == 'observe':
+                    return self.send(200, self.server.releases.observe(pid, payload.get('destinationId'), tree=payload.get('tree')))
+                return self.send(200, self.server.releases.rollback(pid, payload.get('destinationId')))
             if re.fullmatch(r'/api/projects/([a-f0-9]{32})/releases/bind', path):
                 pid = path.split('/')[3]
                 return self.send(200, self.server.releases.bind(pid, payload.get('destination')))
@@ -731,7 +826,31 @@ class Handler(BaseHTTPRequestHandler):
                 else: result = getattr(self.server.runtime,action)(pid,trusted=payload.get('trusted',False))
                 return self.send(200,result)
             if path == '/api/agent/jobs':
-                return self.send(201, self.server.agent_jobs.start(payload.get('projectId'), payload.get('request'), payload.get('operationId')))
+                if payload.get('planId') is not None:
+                    plan = self.server.agent_plans.claim(
+                        payload.get('projectId'), payload.get('planId'), payload.get('operationId'))
+                    focused = plan.get('focusedCheck')
+                    fleet = {
+                        'acceptance': plan['acceptance'], 'allowPaths': plan['allowPaths'], 'size': plan['size'],
+                        'taskClass': plan['taskClass'], 'projectContext': plan['projectContext'],
+                        'focusedCheck': focused,
+                    }
+                    try:
+                        job = self.server.agent_jobs.start(
+                            plan['projectId'], plan['outcome'], payload.get('operationId'), plan['provider'], fleet,
+                            plan_id=plan['id'])
+                    except Exception:
+                        self.server.agent_plans.release_claim(
+                            plan['projectId'], plan['id'], payload.get('operationId'))
+                        raise
+                    self.server.agent_plans.mark_started(
+                        plan['projectId'], plan['id'], job['id'], job['operationId'])
+                    return self.send(201, job)
+                return self.send(201, self.server.agent_jobs.start(
+                    payload.get('projectId'), payload.get('request'), payload.get('operationId'),
+                    payload.get('provider', 'codex'), payload.get('fleet')))
+            if path == '/api/agent/plans':
+                return self.send(201, self.server.agent_plans.create(payload.get('projectId'), payload.get('outcome')))
             if path == '/api/operations/settings':
                 return self.send(200, self.server.operations.configure(payload.get('dailyLimit'), payload.get('expectedRevision')))
             if path == '/api/operations/practice':
@@ -744,9 +863,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, self.server.operations.reconcile(payload.get('operationId'), payload.get('outcome'), payload.get('note')))
             if path == '/api/recovery/import':
                 return self.send(201, self.server.recovery.import_capsule(payload.get('path')))
-            job_match = re.fullmatch(r'/api/agent/jobs/([a-f0-9]{32})/(cancel|apply)', path)
+            job_match = re.fullmatch(r'/api/agent/jobs/([a-f0-9]{32})/(cancel|apply|recover|reject)', path)
             if job_match:
                 action = getattr(self.server.agent_jobs, job_match[2])
+                if job_match[2] == 'apply':
+                    return self.send(200, action(job_match[1], payload.get('reviewAcknowledged', False)))
                 return self.send(200, action(job_match[1]))
             if path == '/api/import':
                 return self.send(201, engine.import_bundle(payload.get('path'), payload.get('name')))

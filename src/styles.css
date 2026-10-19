@@ -30,3 +30,13 @@ dialog{max-height:calc(100dvh - 32px);overflow:auto}.job .consequences{margin:28
 
 /* Recovery destinations and diagnostic paths can be longer than a narrow screen. */
 .notice,.error{overflow-wrap:anywhere}
+
+.operating-state { border: 1px solid var(--line, #ddd); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
+.operating-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1rem; }
+.operating-grid dt { font-size: .8rem; opacity: .7; margin-bottom: .4rem; }
+.operating-grid dd { margin: 0 0 .3rem; font-size: .9rem; overflow-wrap: anywhere; }
+.operating-state details { margin-top: 1rem; }
+.outcome-plan{margin-top:22px}.outcome-plan>h3{font-family:Georgia,"Times New Roman",serif;font-size:24px}.outcome-plan dl{margin:10px 0}.outcome-plan dl>div{display:grid;grid-template-columns:80px minmax(0,1fr);gap:16px;padding:16px 0;border-top:1px solid var(--line)}.outcome-plan dt{font-size:12px;text-transform:uppercase;letter-spacing:1.2px;color:var(--muted)}.outcome-plan dd{margin:0;line-height:1.55;overflow-wrap:anywhere}.path-list{margin:5px 0;padding-left:20px}.path-list li{margin:7px 0;line-height:1.45;overflow-wrap:anywhere}.command-line{display:block;background:var(--sage);padding:10px;border-radius:6px;white-space:pre-wrap}.advanced-agent-fields{border:1px solid var(--line);border-radius:8px;padding:4px 18px 12px;margin-top:22px}.advanced-agent-fields legend{padding:0 8px;font-family:Georgia,"Times New Roman",serif;font-size:20px}.job-cockpit .job-phase{display:grid;gap:5px;border-top:1px solid var(--line);padding:18px 0}.job-phase strong{font-size:16px;font-weight:500}.job-phase span{font-size:13px;color:var(--muted);line-height:1.5}.review-attention{background:#f6e8e2;border-radius:7px;padding:16px 18px;margin:16px 0}.review-attention h3{font-weight:500}.review-attention ul{margin-bottom:0;padding-left:20px}.job-details{margin-top:18px}.job-details section{margin:18px 0}.acknowledgment{display:flex;align-items:flex-start;gap:12px;font-weight:400;line-height:1.5}.acknowledgment input{width:22px;height:22px;flex:0 0 auto;margin:0;accent-color:var(--green)}
+@media(max-width:720px){.outcome-plan dl>div{display:block}.outcome-plan dt{margin-bottom:8px}.form-actions{display:grid;grid-template-columns:1fr}.form-actions button{width:100%}.job-cockpit .section-heading{display:flex;align-items:flex-start}.job-cockpit .section-heading>button{margin-top:0}.path-list{padding-left:18px}}
+.conflict-choice pre { max-height: 16rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 850px) { .operating-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
