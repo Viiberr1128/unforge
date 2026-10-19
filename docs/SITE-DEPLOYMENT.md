@@ -6,8 +6,8 @@ The `site/` directory is a static website. It has no functions, API routes, secr
 
 Before deployment, stage the audited release artifacts in the ignored `site/downloads/` directory:
 
-- `Unforge-0.3.1-macos-arm64.zip`
-- `unforge-0.3.1.tar.gz`
+- `Unforge-0.4.1-macos-arm64.zip`
+- `unforge-0.4.1.tar.gz`
 - `SHA256SUMS.txt` containing SHA-256 checksums for both files
 
 Validate checksums against the release manifest and scan extracted archives, nested binaries, archive metadata, and source history for credentials and personal information. Do not rebuild published versioned artifacts in place. For a new release, change filenames, version copy, and checksums together.

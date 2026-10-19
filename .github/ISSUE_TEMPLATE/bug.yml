@@ -1,0 +1,60 @@
+name: Bug report
+description: Report one reproducible failure using disposable data.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. Keep private projects, credentials, account details, recovery passphrases, and customer information out of this report.
+  - type: input
+    id: version
+    attributes:
+      label: Unforge version
+      description: Find this in About or the build information.
+      placeholder: 0.4.1
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did it happen?
+      options:
+        - Mac app
+        - Local browser app
+        - Source or build tooling
+        - Public website or download
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use a disposable example and list the smallest sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Safe evidence
+      description: Paste only redacted messages or attach screenshots made with disposable data.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed credentials, passphrases, private paths, customer data, and private project details.
+          required: true

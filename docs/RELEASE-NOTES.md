@@ -1,3 +1,11 @@
+# Unforge 0.4.1 — software you can keep
+
+Unforge now introduces itself around the complete ownership loop: bring in ordinary source, make an isolated change with an optional coding agent, review what actually changed, save a version, and recover a separate copy. The public site, guide, repository description, and README use the same implemented scope instead of presenting Fleet internals or a broad GitHub replacement claim as the product.
+
+The release adds a real-product visual walkthrough, a repository social preview, compact first-run guidance, GitHub discovery metadata, and community contribution forms. The website and downloads move together to 0.4.1. No account, telemetry service, hosted workspace, paid API fallback, or new production service is added.
+
+The application capability set remains the outcome-first 0.4 line below. Release validation covers 491 Python tests with the pinned backup tool installed, 14 frontend tests, the production interface build, packaged-source smoke test, public-source and private publication scans, signed and notarized Mac packaging, a clean-install first-project flow, saved-version export, source-capsule rehearsal, narrow-screen website review, and published download readback. Each result is recorded only after it is actually observed.
+
 # Unforge 0.4.0 — outcome-first Fleet work
 
 AI work now starts with the outcome. Unforge inspects the exact saved source without launching a provider, proposes one to eight likely files and an optional focused check, and requires plan approval before it creates a lane or consumes subscription allowance. Advanced mode retains direct provider, size, acceptance, and exact-file controls.

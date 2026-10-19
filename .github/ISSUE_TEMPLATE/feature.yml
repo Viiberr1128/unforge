@@ -1,0 +1,29 @@
+name: Product idea
+description: Describe a concrete ownership problem, not a feature list.
+title: "[Idea]: "
+labels:
+  - product
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What were you trying to accomplish?
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: What do you do now?
+      description: Name the workaround and what makes it fragile or confusing.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What observable result would solve it?
+    validations:
+      required: true
+  - type: textarea
+    id: portability
+    attributes:
+      label: What must remain portable or recoverable?

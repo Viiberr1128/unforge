@@ -1,0 +1,50 @@
+name: First-run report
+description: Tell us whether a new user can complete the ownership loop.
+title: "[First run]: "
+labels:
+  - first-run
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use a disposable project. We want the point where the product stopped making sense, not a polished review.
+  - type: input
+    id: system
+    attributes:
+      label: Mac and macOS version
+      placeholder: Apple silicon Mac, macOS 15
+    validations:
+      required: true
+  - type: checkboxes
+    id: completed
+    attributes:
+      label: What did you complete?
+      options:
+        - label: Installed and opened Unforge
+        - label: Created or brought in a project
+        - label: Changed a file and saved a version
+        - label: Reviewed an optional AI plan or proposal
+        - label: Created and rehearsed a recovery capsule
+        - label: Reopened Unforge and found the project again
+  - type: textarea
+    id: hesitation
+    attributes:
+      label: Where did you hesitate or stop?
+      description: Include the words you saw and what you thought would happen.
+    validations:
+      required: true
+  - type: textarea
+    id: valuable
+    attributes:
+      label: What felt genuinely useful?
+  - type: textarea
+    id: missing
+    attributes:
+      label: What would make you use it for a real project?
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: This report contains only disposable data and no credentials, passphrases, private paths, or customer information.
+          required: true
